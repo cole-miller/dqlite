@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "gateway.h"
 
 #include "bind.h"
@@ -601,6 +603,9 @@ static void handle_exec_sql_cb(struct exec *exec, int status)
 
 static void handle_exec_sql_next(struct handle *req, bool done)
 {
+	tracef("deliberate abort");
+	abort();
+
         tracef("handle exec sql next");
 	struct cursor *cursor = &req->cursor;
 	struct gateway *g = req->gateway;
