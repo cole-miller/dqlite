@@ -590,6 +590,7 @@ static void handle_exec_sql_cb(struct exec *exec, int status)
 		handle_exec_sql_next(req, true);
 	} else {
 		assert(g->leader != NULL);
+		assert(req != NULL);
 		failure(req, status, error_message(g->leader->conn, status));
 		sqlite3_reset(g->stmt);
 		sqlite3_finalize(g->stmt);
