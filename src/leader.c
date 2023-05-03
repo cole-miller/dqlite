@@ -64,13 +64,6 @@ static int openConnection(const char *filename,
 		goto err;
 	}
 
-	/* Disable syncs. */
-	rc = sqlite3_exec(*conn, "PRAGMA synchronous=OFF", NULL, NULL, &msg);
-	if (rc != SQLITE_OK) {
-		tracef("sync off failed %d", rc);
-		goto err;
-	}
-
 	/* Set WAL journaling. */
 	rc = sqlite3_exec(*conn, "PRAGMA journal_mode=WAL", NULL, NULL, &msg);
 	if (rc != SQLITE_OK) {

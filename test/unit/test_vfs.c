@@ -211,7 +211,6 @@ static sqlite3 *__db_open(void)
 	munit_assert_int(rc, ==, SQLITE_OK);
 
 	__db_exec(db, "PRAGMA page_size=512");
-	__db_exec(db, "PRAGMA synchronous=OFF");
 	__db_exec(db, "PRAGMA journal_mode=WAL");
 
 	return db;

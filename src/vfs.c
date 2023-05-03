@@ -1140,7 +1140,7 @@ static int vfsFileSync(sqlite3_file *file, int flags)
 	(void)file;
 	(void)flags;
 
-	return SQLITE_IOERR_FSYNC;
+	return SQLITE_OK;
 }
 
 /* Return the size of the database file in bytes. */
@@ -2946,15 +2946,10 @@ static int vfsDiskFileTruncate(sqlite3_file *file, sqlite_int64 size)
 
 static int vfsDiskFileSync(sqlite3_file *file, int flags)
 {
-	int rv;
-	struct vfsFile *f = (struct vfsFile *)file;
+	(void)file;
+	(void)flags;
 
-	if (f->db != NULL) {
-		rv = f->db->pMethods->xSync(f->db, flags);
-		return rv;
-	}
-
-	return SQLITE_IOERR_FSYNC;
+	return SQLITE_OK;
 }
 
 static int vfsDiskFileSize(sqlite3_file *file, sqlite_int64 *size)

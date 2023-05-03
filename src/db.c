@@ -119,13 +119,6 @@ static int open_follower_conn(const char *filename,
 		goto err;
 	}
 
-	/* Disable syncs. */
-	rc = sqlite3_exec(*conn, "PRAGMA synchronous=OFF", NULL, NULL, &msg);
-	if (rc != SQLITE_OK) {
-		tracef("synchronous=OFF failed");
-		goto err;
-	}
-
 	/* Set WAL journaling. */
 	rc = sqlite3_exec(*conn, "PRAGMA journal_mode=WAL", NULL, NULL, &msg);
 	if (rc != SQLITE_OK) {
