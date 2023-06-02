@@ -29,6 +29,17 @@
 
 #define NODE_STORE_INFO_FORMAT_V1 "v1"
 
+static void logSqliteError(void *arg, int errcode, const char *errmsg) {
+	(void)arg;
+	fprintf(stderr, "SQLITE (%d) %s\n", errcode, errmsg);
+}
+
+int dqlite_init(void) {
+	int rv = sqlite3_config(SQLITE_CONFIG_LOG, logSqliteError, NULL);
+	assert(rv == 0);
+	return 0;
+}
+
 int dqlite__init(struct dqlite_node *d,
 		 dqlite_node_id id,
 		 const char *address,

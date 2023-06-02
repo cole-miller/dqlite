@@ -707,6 +707,7 @@ static bool vfsFilenameEndsWith(const char *filename, const char *suffix)
 static struct vfsDatabase *vfsDatabaseLookup(struct vfs *v,
 					     const char *filename)
 {
+	tracef("vfsDatabaseLookup(%s)", filename);
 	size_t n = strlen(filename);
 	unsigned i;
 
@@ -1736,6 +1737,7 @@ static const sqlite3_io_methods vfsFileMethods = {
 /* Create a database object and add it to the databases array. */
 static struct vfsDatabase *vfsCreateDatabase(struct vfs *v, const char *name)
 {
+	tracef("vfsCreateDatabase(%s)", name);
 	unsigned n = v->n_databases + 1;
 	struct vfsDatabase **databases;
 	struct vfsDatabase *d;
@@ -3223,6 +3225,12 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 	/* Search if the database object exists already. */
 	database = vfsDatabaseLookup(v, filename);
 	exists = database != NULL;
+	if (exists) {
+		tracef("database %s already exists", filename);
+		assert(open(filename, O_RDWR) >= 0);
+	} else {
+		tracef("database %s does not exist", filename);
+	}
 
 	if (flags & SQLITE_OPEN_MAIN_DB) {
 		type = VFS__DATABASE;
@@ -3246,6 +3254,7 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 		/* When opening a WAL or journal file we expect the main
 		 * database file to have already been created. */
 		if (type == VFS__WAL || type == VFS__JOURNAL) {
+			tracef("tried to open WAL before creating database file");
 			v->error = ENOENT;
 			rc = SQLITE_CANTOPEN;
 			goto err;
@@ -3255,6 +3264,7 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 
 		/* Check the create flag. */
 		if (!create) {
+			tracef("database does not exist and SQLITE_OPEN_CREATE not passed");
 			v->error = ENOENT;
 			rc = SQLITE_CANTOPEN;
 			goto err;
@@ -3262,6 +3272,7 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 
 		database = vfsCreateDatabase(v, filename);
 		if (database == NULL) {
+			tracef("failed to create database (ENOMEM)");
 			v->error = ENOMEM;
 			rc = SQLITE_CANTOPEN;
 			goto err;
@@ -3279,6 +3290,7 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 
 		rc = vfs->xOpen(vfs, filename, f->db, flags, out_flags);
 		if (rc != SQLITE_OK) {
+			tracef("vfs->xOpen returned %d", rc);
 			sqlite3_free(f->db);
 			f->db = NULL;
 			return rc;

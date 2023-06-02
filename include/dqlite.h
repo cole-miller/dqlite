@@ -12,6 +12,8 @@
 /* XXX */
 #define DQLITE_VISIBLE_TO_TESTS DQLITE_API
 
+DQLITE_API int dqlite_init(void);
+
 /**
  * Version.
  */
