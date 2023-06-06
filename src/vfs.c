@@ -2159,6 +2159,8 @@ int VfsPoll(sqlite3_vfs *vfs,
 		return DQLITE_ERROR;
 	}
 
+	assert(access(filename, F_OK) == 0);
+
 	shm = &database->shm;
 	wal = &database->wal;
 
@@ -3157,6 +3159,7 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 	bool exists;
 	int exclusive = flags & SQLITE_OPEN_EXCLUSIVE;
 	int create = flags & SQLITE_OPEN_CREATE;
+	int fd;
 	int rc;
 	tracef("filename:%s", filename);
 
@@ -3290,6 +3293,10 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 	f->vfs = v;
 	f->type = type;
 	f->database = database;
+
+	fd = open(filename, O_RDONLY);
+	assert(fd >= 0 || (type != VFS__DATABASE));
+	close(fd);
 
 	return SQLITE_OK;
 
