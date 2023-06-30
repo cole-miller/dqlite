@@ -3227,7 +3227,6 @@ static int vfsDiskOpen(sqlite3_vfs *vfs,
 	exists = database != NULL;
 	if (exists) {
 		tracef("database %s already exists", filename);
-		assert(open(filename, O_RDWR) >= 0);
 	} else {
 		tracef("database %s does not exist", filename);
 	}
