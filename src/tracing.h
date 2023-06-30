@@ -21,12 +21,10 @@ DQLITE_VISIBLE_TO_TESTS extern bool _dqliteTracingEnabled;
 		if (UNLIKELY(_dqliteTracingEnabled)) {                      \
 			static char _msg[1024];                             \
 			snprintf(_msg, sizeof(_msg), __VA_ARGS__);          \
-			struct timespec ts = {0};                           \
-			/* Ignore errors */                                 \
-			clock_gettime(CLOCK_REALTIME, &ts);                 \
-			int64_t ns = ts.tv_sec * 1000000000 + ts.tv_nsec;   \
-			fprintf(stderr, "LIBDQLITE %" PRId64 " %s:%d %s\n", \
-				ns, __func__, __LINE__, _msg);              \
+			time_t thetime = time(NULL); \
+			char *ts = ctime(&thetime); \
+			fprintf(stderr, "LIBDQLITE %s %s:%d %s\n", \
+				ts, __func__, __LINE__, _msg);              \
 		}                                                           \
 	} while (0)
 
