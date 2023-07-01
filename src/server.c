@@ -44,10 +44,6 @@ int dqlite__init(struct dqlite_node *d,
 	int urandom;
 	ssize_t count;
 
-	rv = sqlite3_config(SQLITE_CONFIG_LOG, logSqliteError, NULL);
-	assert(rv == 0);
-	return 0;
-
 	d->initialized = false;
 	memset(d->errmsg, 0, sizeof d->errmsg);
 
@@ -203,6 +199,9 @@ int dqlite_node_create(dqlite_node_id id,
 		       const char *data_dir,
 		       dqlite_node **t)
 {
+	int rv = sqlite3_config(SQLITE_CONFIG_LOG, logSqliteError, NULL);
+	assert(rv == 0);
+
 	*t = sqlite3_malloc(sizeof **t);
 	if (*t == NULL) {
 		return DQLITE_NOMEM;
