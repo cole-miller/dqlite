@@ -8,6 +8,7 @@
 #include "tracing.h"
 #include "vfs.h"
 
+#include <stdlib.h>
 #include <sys/mman.h>
 
 struct fsm
@@ -83,9 +84,8 @@ static int databaseReadUnlock(struct db *db)
 	}
 }
 
-static void maybeCheckpoint(struct db *db)
+static void doCheckpointForReal(struct db *db)
 {
-	tracef("maybe checkpoint");
 	struct sqlite3_file *main_f;
 	struct sqlite3_file *wal;
 	volatile void *region;
@@ -95,6 +95,73 @@ static void maybeCheckpoint(struct db *db)
 	int wal_size;
 	int ckpt;
 	int i;
+	int rv;
+
+	page_size = db->config->page_size;
+	/* Get the database wal file associated with this connection */
+	rv = sqlite3_file_control(db->follower, "main",
+				  SQLITE_FCNTL_JOURNAL_POINTER, &wal);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	rv = wal->pMethods->xFileSize(wal, &size);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	/* Calculate the number of frames. */
+	pages = (unsigned)((size - 32) / (24 + page_size));
+
+	/* Check if the size of the WAL is beyond the threshold. */
+	if (pages < db->config->checkpoint_threshold) {
+		tracef("wal size (%u) < threshold (%u)", pages,
+		       db->config->checkpoint_threshold);
+		return;
+	}
+
+	/* Get the database file associated with this db->follower connection */
+	rv = sqlite3_file_control(db->follower, "main",
+				  SQLITE_FCNTL_FILE_POINTER, &main_f);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	/* Get the first SHM region, which contains the WAL header. */
+	rv = main_f->pMethods->xShmMap(main_f, 0, 0, 0, &region);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	rv = main_f->pMethods->xShmUnmap(main_f, 0);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	/* Try to acquire all locks. */
+	for (i = 0; i < SQLITE_SHM_NLOCK; i++) {
+		int flags = SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE;
+
+		rv = main_f->pMethods->xShmLock(main_f, i, 1, flags);
+		if (rv == SQLITE_BUSY) {
+			tracef("busy reader or writer - retry next time");
+			return;
+		}
+
+		/* Not locked. Let's release the lock we just
+		 * acquired. */
+		flags = SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE;
+		main_f->pMethods->xShmLock(main_f, i, 1, flags);
+	}
+
+	rv = sqlite3_wal_checkpoint_v2(
+	    db->follower, "main", SQLITE_CHECKPOINT_TRUNCATE, &wal_size, &ckpt);
+	/* TODO assert(rv == 0) here? Which failure modes do we expect? */
+	if (rv != 0) {
+		tracef("sqlite3_wal_checkpoint_v2 failed %d", rv);
+		return;
+	}
+	tracef("sqlite3_wal_checkpoint_v2 success");
+
+	/* Since no reader transaction is in progress, we must be able to
+	 * checkpoint the entire WAL */
+	assert(wal_size == 0);
+	assert(ckpt == 0);
+}
+
+static void maybeCheckpoint(struct db *db)
+{
+	tracef("maybe checkpoint");
 	int rv;
 
 	if (db->config->disk) {
@@ -119,70 +186,11 @@ static void maybeCheckpoint(struct db *db)
 		goto err_after_db_lock;
 	}
 
-	page_size = db->config->page_size;
-	/* Get the database wal file associated with this connection */
-	rv = sqlite3_file_control(db->follower, "main",
-				  SQLITE_FCNTL_JOURNAL_POINTER, &wal);
-	assert(rv == SQLITE_OK); /* Should never fail */
+	doCheckpointForReal(db);
 
-	rv = wal->pMethods->xFileSize(wal, &size);
-	assert(rv == SQLITE_OK); /* Should never fail */
-
-	/* Calculate the number of frames. */
-	pages = (unsigned)((size - 32) / (24 + page_size));
-
-	/* Check if the size of the WAL is beyond the threshold. */
-	if (pages < db->config->checkpoint_threshold) {
-		tracef("wal size (%u) < threshold (%u)", pages,
-		       db->config->checkpoint_threshold);
-		goto err_after_db_open;
-	}
-
-	/* Get the database file associated with this db->follower connection */
-	rv = sqlite3_file_control(db->follower, "main",
-				  SQLITE_FCNTL_FILE_POINTER, &main_f);
-	assert(rv == SQLITE_OK); /* Should never fail */
-
-	/* Get the first SHM region, which contains the WAL header. */
-	rv = main_f->pMethods->xShmMap(main_f, 0, 0, 0, &region);
-	assert(rv == SQLITE_OK); /* Should never fail */
-
-	rv = main_f->pMethods->xShmUnmap(main_f, 0);
-	assert(rv == SQLITE_OK); /* Should never fail */
-
-	/* Try to acquire all locks. */
-	for (i = 0; i < SQLITE_SHM_NLOCK; i++) {
-		int flags = SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE;
-
-		rv = main_f->pMethods->xShmLock(main_f, i, 1, flags);
-		if (rv == SQLITE_BUSY) {
-			tracef("busy reader or writer - retry next time");
-			goto err_after_db_open;
-		}
-
-		/* Not locked. Let's release the lock we just
-		 * acquired. */
-		flags = SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE;
-		main_f->pMethods->xShmLock(main_f, i, 1, flags);
-	}
-
-	rv = sqlite3_wal_checkpoint_v2(
-	    db->follower, "main", SQLITE_CHECKPOINT_TRUNCATE, &wal_size, &ckpt);
-	/* TODO assert(rv == 0) here? Which failure modes do we expect? */
-	if (rv != 0) {
-		tracef("sqlite3_wal_checkpoint_v2 failed %d", rv);
-		goto err_after_db_open;
-	}
-	tracef("sqlite3_wal_checkpoint_v2 success");
-
-	/* Since no reader transaction is in progress, we must be able to
-	 * checkpoint the entire WAL */
-	assert(wal_size == 0);
-	assert(ckpt == 0);
-
-err_after_db_open:
 	sqlite3_close(db->follower);
 	db->follower = NULL;
+
 err_after_db_lock:
 	rv = databaseReadUnlock(db);
 	assert(rv == 0);
@@ -582,7 +590,7 @@ static int fsm__snapshot(struct raft_fsm *fsm,
 		n_db++;
 	}
 
-	/* Lock all databases, preventing the checkpoint from running */
+	/* Lock all databases. */
 	QUEUE__FOREACH(head, &f->registry->dbs)
 	{
 		db = QUEUE__DATA(head, struct db, queue);
@@ -754,123 +762,6 @@ void fsm__close(struct raft_fsm *fsm)
  Disk-based FSM
  *****************************************************************************/
 
-/* The synchronous part of the database encoding */
-static int encodeDiskDatabaseSync(struct db *db, struct raft_buffer *r_buf)
-{
-	sqlite3_vfs *vfs;
-	struct dqlite_buffer *buf = (struct dqlite_buffer *)r_buf;
-	int rv;
-
-	vfs = sqlite3_vfs_find(db->config->name);
-	rv = VfsDiskSnapshotWal(vfs, db->path, buf);
-	if (rv != 0) {
-		goto err;
-	}
-
-	return 0;
-
-err:
-	assert(rv != 0);
-	return rv;
-}
-
-/* The asynchronous part of the database encoding */
-static int encodeDiskDatabaseAsync(struct db *db,
-				   struct raft_buffer r_bufs[],
-				   uint32_t n)
-{
-	struct snapshotDatabase header;
-	sqlite3_vfs *vfs;
-	void *cursor;
-	struct dqlite_buffer *bufs = (struct dqlite_buffer *)r_bufs;
-	int rv;
-
-	assert(n == 3);
-
-	vfs = sqlite3_vfs_find(db->config->name);
-	rv = VfsDiskSnapshotDb(vfs, db->path, &bufs[1]);
-	if (rv != 0) {
-		goto err;
-	}
-
-	/* Database header. */
-	header.filename = db->filename;
-	header.main_size = bufs[1].len;
-	header.wal_size = bufs[2].len;
-	bufs[0].len = snapshotDatabase__sizeof(&header);
-	bufs[0].base = sqlite3_malloc64(bufs[0].len);
-	if (bufs[0].base == NULL) {
-		rv = RAFT_NOMEM;
-		goto err;
-	}
-
-	cursor = bufs[0].base;
-	snapshotDatabase__encode(&header, &cursor);
-	return 0;
-
-	/* Cleanup is performed by call to snapshot_finalize */
-err:
-	assert(rv != 0);
-	return rv;
-}
-
-/* Determine the total number of raft buffers needed
- * for a snapshot in disk-mode */
-static unsigned snapshotNumBufsDisk(struct fsm *f)
-{
-	queue *head;
-	unsigned n = 1; /* snapshot header */
-
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		n += 3; /* database header, database file and wal */
-	}
-
-	return n;
-}
-
-/* An example array of snapshot buffers looks like this:
- *
- * bufs:  SH DH1 DBMMAP1 WAL1 DH2 DMMAP2 WAL2
- * index:  0   1       2    3   4      5    6
- *
- * SH:     Snapshot Header
- * DHx:    Database Header
- * DBMMAP: Pointer to mmap'ed database file
- * WALx:   a WAL
- * */
-static void freeSnapshotBufsDisk(struct fsm *f,
-				 struct raft_buffer bufs[],
-				 unsigned n_bufs)
-{
-	queue *head;
-	unsigned i;
-
-	if (bufs == NULL || n_bufs == 0) {
-		return;
-	}
-
-	/* Free snapshot header */
-	sqlite3_free(bufs[0].base);
-
-	i = 1;
-	/* Free all database headers & WAL buffers. Unmap the DB file. */
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		if (i == n_bufs) {
-			break;
-		}
-		/* i is the index of the database header */
-		sqlite3_free(bufs[i].base);
-		if (bufs[i + 1].base != NULL) {
-			munmap(bufs[i + 1].base, bufs[i + 1].len);
-		}
-		sqlite3_free(bufs[i + 2].base);
-		/* i is now the index of the next database header (if any) */
-		i += 3;
-	}
-}
-
 static int fsm__snapshot_disk(struct raft_fsm *fsm,
 			      struct raft_buffer *bufs[],
 			      unsigned *n_bufs)
@@ -880,6 +771,8 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 	struct db *db = NULL;
 	unsigned n_db = 0;
 	unsigned i;
+	size_t len;
+	bool opened_follower = false;
 	int rv;
 
 	/* First count how many databases we have and check that no transaction
@@ -890,7 +783,6 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 		if (db->tx_id != 0 || db->read_lock) {
 			return RAFT_BUSY;
 		}
-		n_db++;
 	}
 
 	/* Lock all databases, preventing the checkpoint from running. This
@@ -903,102 +795,61 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 		assert(rv == 0);
 	}
 
-	*n_bufs = snapshotNumBufsDisk(f);
+	if (db->follower == NULL) {
+		rv = db__open_follower(db);
+		if (rv != 0) {
+			tracef("open follower failed %d", rv);
+			/* XXX */
+			abort();
+		}
+		opened_follower = true;
+	}
+
+	/* Checkpoint every database */
+	n_db = 0;
+	QUEUE__FOREACH(head, &f->registry->dbs)
+	{
+		db = QUEUE__DATA(head, struct db, queue);
+		/* XXX need to do something about errors here */
+		doCheckpointForReal(db);
+		n_db += 1;
+	}
+
+	/* Make up a pseudo-snapshot for raft: a bunch of null-terminated filenames */
+	*n_bufs = 1 + n_db;
 	*bufs = sqlite3_malloc64(*n_bufs * sizeof **bufs);
 	if (*bufs == NULL) {
-		rv = RAFT_NOMEM;
-		goto err;
+		/* XXX */
+		return RAFT_NOMEM;
 	}
 
-	/* zero-init buffers, helps with cleanup */
-	for (unsigned j = 0; j < *n_bufs; j++) {
-		(*bufs)[j].base = NULL;
-		(*bufs)[j].len = 0;
+	(*bufs)[0].base = sqlite3_malloc64(4);
+	if ((*bufs)[0].base == NULL) {
+		return RAFT_NOMEM;
 	}
-
-	rv = encodeSnapshotHeader(n_db, &(*bufs)[0]);
-	if (rv != 0) {
-		goto err_after_bufs_alloc;
-	}
-
-	/* Copy WAL of all databases. */
+	BytePutBe32(n_db, (*bufs)[0].base);
+	(*bufs)[0].len = 4;
 	i = 1;
 	QUEUE__FOREACH(head, &f->registry->dbs)
 	{
 		db = QUEUE__DATA(head, struct db, queue);
-		/* database_header + db + WAL */
-		unsigned n = 3;
-		/* pass pointer to buffer that will contain WAL. */
-		rv = encodeDiskDatabaseSync(db, &(*bufs)[i + n - 1]);
-		if (rv != 0) {
-			goto err_after_encode_sync;
+		len = strlen(db->filename) + 1;
+		(*bufs)[i].base = sqlite3_malloc64(len);
+		if ((*bufs)[i].base == NULL) {
+			/* XXX */
+			return RAFT_NOMEM;
 		}
-		i += n;
+		memcpy((*bufs)[i].base, db->filename, len);
+		(*bufs)[i].len = len;
+		i += 1;
 	}
 
-	assert(i == *n_bufs);
-	return 0;
-
-err_after_encode_sync:
-	freeSnapshotBufsDisk(f, *bufs, i);
-err_after_bufs_alloc:
-	sqlite3_free(*bufs);
-err:
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		db = QUEUE__DATA(head, struct db, queue);
-		databaseReadUnlock(db);
-	}
-	assert(rv != 0);
-	return rv;
-}
-
-static int fsm__snapshot_async_disk(struct raft_fsm *fsm,
-				    struct raft_buffer *bufs[],
-				    unsigned *n_bufs)
-{
-	struct fsm *f = fsm->data;
-	queue *head;
-	struct snapshotHeader header;
-	struct db *db = NULL;
-	unsigned i;
-	int rv;
-
-	/* Decode the header to determine the number of databases. */
-	struct cursor cursor = {(*bufs)[0].base, (*bufs)[0].len};
-	rv = snapshotHeader__decode(&cursor, &header);
-	if (rv != 0) {
-		tracef("decode failed %d", rv);
-		return -1;
-	}
-	if (header.format != SNAPSHOT_FORMAT) {
-		tracef("bad format");
-		return -1;
-	}
-
-	/* Encode individual databases. */
-	i = 1;
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		if (i == *n_bufs) {
-			/* In case a db was added in meanwhile */
-			break;
-		}
-		db = QUEUE__DATA(head, struct db, queue);
-		/* database_header + database file + wal */
-		unsigned n = 3;
-		rv = encodeDiskDatabaseAsync(db, &(*bufs)[i], n);
-		if (rv != 0) {
-			goto err;
-		}
-		i += n;
+	if (opened_follower) {
+		sqlite3_close(db->follower);
+		db->follower = NULL;
 	}
 
 	return 0;
-
-err:
-	assert(rv != 0);
-	return rv;
 }
 
 static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
@@ -1006,137 +857,59 @@ static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
 				       unsigned *n_bufs)
 {
 	struct fsm *f = fsm->data;
-	queue *head;
 	struct db *db;
+	unsigned i;
+	uint32_t orig_n_db;
 	unsigned n_db;
-	struct snapshotHeader header;
+	queue *head;
 	int rv;
 
 	if (bufs == NULL) {
 		return 0;
 	}
 
-	/* Decode the header to determine the number of databases. */
-	struct cursor cursor = {(*bufs)[0].base, (*bufs)[0].len};
-	rv = snapshotHeader__decode(&cursor, &header);
-	if (rv != 0) {
-		tracef("decode failed %d", rv);
-		return -1;
-	}
-	if (header.format != SNAPSHOT_FORMAT) {
-		tracef("bad format");
-		return -1;
-	}
+	orig_n_db = ByteGetBe32((*bufs)[0].base);
 
-	/* Free allocated buffers */
-	freeSnapshotBufsDisk(f, *bufs, *n_bufs);
+	for (i = 0; i < *n_bufs; i += 1) {
+		sqlite3_free((*bufs)[i].base);
+	}
 	sqlite3_free(*bufs);
-	*bufs = NULL;
 	*n_bufs = 0;
+	*bufs = NULL;
 
 	/* Unlock all databases that were locked for the snapshot, this is safe
 	 * because DB's are only ever added at the back of the queue. */
 	n_db = 0;
 	QUEUE__FOREACH(head, &f->registry->dbs)
 	{
-		if (n_db == header.n) {
+		if (n_db == orig_n_db) {
 			break;
 		}
 		db = QUEUE__DATA(head, struct db, queue);
-		databaseReadUnlock(db);
+		rv = databaseReadUnlock(db);
+		assert(rv == 0);
 		n_db++;
 	}
 
 	return 0;
 }
 
-/* Decode the disk database contained in a snapshot. */
-static int decodeDiskDatabase(struct fsm *f, struct cursor *cursor)
-{
-	struct snapshotDatabase header;
-	struct db *db;
-	sqlite3_vfs *vfs;
-	int exists;
-	int rv;
-
-	rv = snapshotDatabase__decode(cursor, &header);
-	if (rv != 0) {
-		return rv;
-	}
-	rv = registry__db_get(f->registry, header.filename, &db);
-	if (rv != 0) {
-		return rv;
-	}
-
-	vfs = sqlite3_vfs_find(db->config->name);
-
-	/* Check if the database file exists, and create it by opening a
-	 * connection if it doesn't. */
-	rv = vfs->xAccess(vfs, db->path, 0, &exists);
-	assert(rv == 0);
-
-	if (!exists) {
-		rv = db__open_follower(db);
-		if (rv != 0) {
-			return rv;
-		}
-		sqlite3_close(db->follower);
-		db->follower = NULL;
-	}
-
-	/* The last check can overflow, but we would already be lost anyway, as
-	 * the raft snapshot restore API only supplies one buffer and the data
-	 * has to fit in size_t bytes anyway. */
-	if (header.main_size > SIZE_MAX || header.wal_size > SIZE_MAX ||
-	    header.main_size + header.wal_size > SIZE_MAX) {
-		tracef("main_size:%" PRIu64 "B wal_size:%" PRIu64
-		       "B would overflow max DB size (%zuB)",
-		       header.main_size, header.wal_size, SIZE_MAX);
-		return -1;
-	}
-
-	/* Due to the check above, these casts are safe. */
-	rv = VfsDiskRestore(vfs, db->path, cursor->p, (size_t)header.main_size,
-			    (size_t)header.wal_size);
-	if (rv != 0) {
-		tracef("VfsDiskRestore %d", rv);
-		return rv;
-	}
-
-	cursor->p += header.main_size + header.wal_size;
-	return 0;
-}
-
 static int fsm__restore_disk(struct raft_fsm *fsm, struct raft_buffer *buf)
 {
-	tracef("fsm restore disk");
-	struct fsm *f = fsm->data;
-	struct cursor cursor = {buf->base, buf->len};
-	struct snapshotHeader header;
+	unsigned n_db;
+	char *p;
+	char *filename;
 	unsigned i;
-	int rv;
 
-	rv = snapshotHeader__decode(&cursor, &header);
-	if (rv != 0) {
-		tracef("decode failed %d", rv);
-		return rv;
+	(void)fsm;
+
+	n_db = ByteGetBe32(buf->base);
+	p = buf->base + 4;
+	for (i = 0; i < n_db; i += 1) {
+		filename = p;
+		tracef("check existence of DB %s", filename);
+		p += strlen(filename) + 1;
 	}
-	if (header.format != SNAPSHOT_FORMAT) {
-		tracef("bad format");
-		return RAFT_MALFORMED;
-	}
-
-	for (i = 0; i < header.n; i++) {
-		rv = decodeDiskDatabase(f, &cursor);
-		if (rv != 0) {
-			tracef("decode failed");
-			return rv;
-		}
-	}
-
-	/* Don't use sqlite3_free as this buffer is allocated by raft. */
-	raft_free(buf->base);
-
 	return 0;
 }
 
@@ -1161,7 +934,7 @@ int fsm__init_disk(struct raft_fsm *fsm,
 	fsm->data = f;
 	fsm->apply = fsm__apply;
 	fsm->snapshot = fsm__snapshot_disk;
-	fsm->snapshot_async = fsm__snapshot_async_disk;
+	fsm->snapshot_async = NULL;
 	fsm->snapshot_finalize = fsm__snapshot_finalize_disk;
 	fsm->restore = fsm__restore_disk;
 
