@@ -97,6 +97,11 @@ static void maybeCheckpoint(struct db *db)
 	int i;
 	int rv;
 
+	if (db->config->disk) {
+		tracef("disk mode => no scheduled checkpoints");
+		return;
+	}
+
 	/* Don't run when a snapshot is busy. Running a checkpoint while a
 	 * snapshot is busy will result in illegal memory accesses by the
 	 * routines that try to access database page pointers contained in the
