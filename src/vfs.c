@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include <raft.h>
 
@@ -710,6 +711,11 @@ static struct vfsDatabase *vfsDatabaseLookup(struct vfs *v,
 	tracef("vfsDatabaseLookup(%s)", filename);
 	size_t n = strlen(filename);
 	unsigned i;
+	DIR *d;
+
+	d = opendir("/opt/dqlite/data/database");
+	assert(d != NULL);
+	closedir(d);
 
 	assert(v != NULL);
 	assert(filename != NULL);
