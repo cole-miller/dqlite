@@ -716,6 +716,7 @@ static struct vfsDatabase *vfsDatabaseLookup(struct vfs *v,
 	d = opendir("/opt/dqlite/data/database");
 	assert(d != NULL);
 	closedir(d);
+	tracef("DATABASE DIR IS OKAY");
 
 	assert(v != NULL);
 	assert(filename != NULL);
