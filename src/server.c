@@ -189,11 +189,19 @@ void dqlite__close(struct dqlite_node *d)
 	}
 }
 
+static void sqliteLogger(void *data, int errcode, const char *errmsg)
+{
+	(void)data;
+	fprintf(stderr, "SQLITE (%d) %s\n", errcode, errmsg);
+}
+
 int dqlite_node_create(dqlite_node_id id,
 		       const char *address,
 		       const char *data_dir,
 		       dqlite_node **t)
 {
+	sqlite3_config(SQLITE_CONFIG_LOG, sqliteLogger, NULL);
+
 	*t = sqlite3_malloc(sizeof **t);
 	if (*t == NULL) {
 		return DQLITE_NOMEM;
