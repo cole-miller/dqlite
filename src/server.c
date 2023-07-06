@@ -354,17 +354,6 @@ int dqlite_node_set_snapshot_params(dqlite_node *n,
 		return DQLITE_MISUSE;
 	}
 
-	if (snapshot_trailing < 4) {
-		return DQLITE_MISUSE;
-	}
-
-	/* This is a safety precaution and allows to recover data from the
-	 * second last raft snapshot and segment files in case the last raft
-	 * snapshot is unusable. */
-	if (snapshot_trailing < snapshot_threshold) {
-		return DQLITE_MISUSE;
-	}
-
 	raft_set_snapshot_threshold(&n->raft, snapshot_threshold);
 	raft_set_snapshot_trailing(&n->raft, snapshot_trailing);
 	return 0;

@@ -10,6 +10,7 @@
 
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <signal.h>
 
 struct fsm
 {
@@ -97,6 +98,11 @@ static void doCheckpointForReal(struct db *db)
 	int i;
 	int rv;
 
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+
 	page_size = db->config->page_size;
 	/* Get the database wal file associated with this connection */
 	rv = sqlite3_file_control(db->follower, "main",
@@ -157,6 +163,8 @@ static void doCheckpointForReal(struct db *db)
 	 * checkpoint the entire WAL */
 	assert(wal_size == 0);
 	assert(ckpt == 0);
+
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
 }
 
 static void maybeCheckpoint(struct db *db)
@@ -275,6 +283,11 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 				sqlite3_free(page_numbers);
 				return rv;
 			}
+			db__open_follower(db);
+			tracef("check");
+			checkDatabase(db->follower);
+			sqlite3_close(db->follower);
+			db->follower = NULL;
 		}
 	} else {
 		rv =

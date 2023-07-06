@@ -709,4 +709,26 @@ DQLITE_API int dqlite_vfs_restore_disk(sqlite3_vfs *vfs,
 				       const void *data,
 				       size_t main_size,
 				       size_t wal_size);
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+static inline int checkDatabaseCb(void *arg, int ncol, char **coltxts, char **colnames) {
+	(void)arg;
+	(void)colnames;
+	(void)ncol;
+	if (strcmp(coltxts[0], "ok") != 0) {
+		fprintf(stderr, "DATABASE IS MESSED UP\n");
+		abort();
+	}
+	return 0;
+}
+
+static inline void checkDatabase(sqlite3 *conn) {
+	fprintf(stderr, "INTEGRITY CHECK\n");
+	sqlite3_exec(conn, "PRAGMA integrity_check", checkDatabaseCb, NULL, NULL);
+	fprintf(stderr, "INTEGRITY CHECK OKAY\n");
+}
+
 #endif /* DQLITE_H */
