@@ -815,7 +815,10 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 		n_db += 1;
 	}
 
-	/* Make up a pseudo-snapshot for raft: a bunch of null-terminated filenames */
+	/* Make up a pseudo-snapshot for raft: a bunch of null-terminated
+	 * filenames
+	 *
+	 * TODO does the fake raft snapshot also need a header? */
 	*n_bufs = 1 + n_db;
 	*bufs = sqlite3_malloc64(*n_bufs * sizeof **bufs);
 	if (*bufs == NULL) {
@@ -870,8 +873,16 @@ static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
 
 	orig_n_db = ByteGetBe32((*bufs)[0].base);
 
-	for (i = 0; i < *n_bufs; i += 1) {
-		sqlite3_free((*bufs)[i].base);
+	assert(*n_bufs == 1 + 2 * orig_n_db);
+
+	sqlite3_free((*bufs)[0].base);
+	for (i = 0; i < orig_n_db; i += 1) {
+		sqlite3_free((*bufs)[1 + 2 * i].base);
+		rv = munmap((*bufs)[2 + 2 * i].base, (*bufs)[2 + 2 * i].len);
+		if (rv != 0) {
+			/* XXX */
+			abort();
+		}
 	}
 	sqlite3_free(*bufs);
 	*n_bufs = 0;
@@ -913,6 +924,105 @@ static int fsm__restore_disk(struct raft_fsm *fsm, struct raft_buffer *buf)
 	return 0;
 }
 
+static int fsm__post_snapshot_get_disk(struct raft_fsm *fsm,
+				       struct raft_io *io,
+				       struct raft_io_snapshot_get *get,
+				       struct raft_snapshot *snapshot,
+				       raft_io_snapshot_get_cb cb)
+{
+	struct fsm *f = (struct fsm *)fsm->data;
+	struct raft_buffer *new_bufs;
+	unsigned new_n_bufs;
+	unsigned n_db;
+	unsigned i;
+	char *p;
+	char *filename;
+	struct db *db;
+	char buf[PATH_MAX];
+	int fd;
+	void *dbmap;
+	struct snapshotDatabase dbhdr;
+	uint32_t n_pages;
+	void *cursor;
+	int rv;
+
+	(void)io;
+
+	assert(snapshot->n_bufs == 1);
+	assert(snapshot->bufs[0].len >= 4);
+
+	n_db = ByteGetBe32(snapshot->bufs[0].base);
+	/* no WALs */
+	new_n_bufs = 1 + 2 * n_db;
+	new_bufs = raft_calloc(new_n_bufs, sizeof *new_bufs);
+
+	rv = encodeSnapshotHeader(n_db, &new_bufs[0]);
+	if (rv != 0) {
+		/* XXX */
+		abort();
+	}
+
+	p = snapshot->bufs[0].base + 4;
+	for (i = 0; i < n_db; i += 1) {
+		filename = p;
+		rv = registry__db_get(f->registry, filename, &db);
+		if (rv != 0) {
+			/* XXX */
+			abort();
+		}
+
+		snprintf(buf, PATH_MAX, "%s/database/%s", db->config->dir, filename);
+		fd = open(buf, O_RDONLY);
+		if (fd < 0) {
+			/* XXX */
+			abort();
+		}
+		dbmap = mmap(NULL, 100, PROT_READ, MAP_SHARED, fd, 0);
+		if (dbmap == MAP_FAILED) {
+			/* XXX */
+			abort();
+		}
+		n_pages = ByteGetBe32(dbmap + 28);
+		rv = munmap(dbmap, 100);
+		if (rv != 0) {
+			/* XXX */
+			abort();
+		}
+		dbmap = mmap(NULL, n_pages * db->config->page_size, PROT_READ, MAP_SHARED, fd, 0);
+		if (dbmap == MAP_FAILED) {
+			/* XXX */
+			abort();
+		}
+		dbhdr.filename = filename;
+		dbhdr.main_size = n_pages * db->config->page_size;
+		dbhdr.wal_size = 0;
+		new_bufs[1 + 2 * i].len = snapshotDatabase__sizeof(&dbhdr);
+		new_bufs[1 + 2 * i].base = sqlite3_malloc64(new_bufs[1 + 2 * i].len);
+		if (new_bufs[1 + 2 * i].base == NULL) {
+			/* XXX */
+			abort();
+		}
+		cursor = new_bufs[1 + 2 * i].base;
+		snapshotDatabase__encode(&dbhdr, &cursor);
+		new_bufs[2 + 2 * i].base = dbmap;
+		new_bufs[2 + 2 * i].len = n_pages * db->config->page_size;
+		p += strlen(filename) + 1;
+	}
+
+	/* Finalize the old snapshot */
+	for (i = 0; i < n_db; i += 1) {
+		sqlite3_free(snapshot->bufs[i].base);
+	}
+	sqlite3_free(snapshot->bufs);
+	/* Put the new snapshot in place */
+	snapshot->bufs = new_bufs;
+	snapshot->n_bufs = new_n_bufs;
+
+	cb(get, snapshot, 0);
+
+	return 0;
+}
+
 int fsm__init_disk(struct raft_fsm *fsm,
 		   struct config *config,
 		   struct registry *registry)
@@ -930,13 +1040,14 @@ int fsm__init_disk(struct raft_fsm *fsm,
 	f->pending.page_numbers = NULL;
 	f->pending.pages = NULL;
 
-	fsm->version = 3;
+	fsm->version = 4;
 	fsm->data = f;
 	fsm->apply = fsm__apply;
 	fsm->snapshot = fsm__snapshot_disk;
 	fsm->snapshot_async = NULL;
 	fsm->snapshot_finalize = fsm__snapshot_finalize_disk;
 	fsm->restore = fsm__restore_disk;
+	fsm->post_snapshot_get = fsm__post_snapshot_get_disk;
 
 	return 0;
 }
