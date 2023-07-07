@@ -905,6 +905,7 @@ static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
 	return 0;
 }
 
+/* This doesn't really do anything, the actual "restoration" work lives in fsm__pre_snapshot_put_disk */
 static int fsm__restore_disk(struct raft_fsm *fsm, struct raft_buffer *buf)
 {
 	unsigned n_db;
@@ -921,11 +922,127 @@ static int fsm__restore_disk(struct raft_fsm *fsm, struct raft_buffer *buf)
 		tracef("check existence of DB %s", filename);
 		p += strlen(filename) + 1;
 	}
+
+	raft_free(buf->base);
+
 	return 0;
 }
 
+/* Decode the disk database contained in a snapshot. */
+static int decodeDiskDatabase(struct fsm *f, const char **filename, struct cursor *cursor)
+{
+	/* XXX update this to reflect that the WALs will always be empty */
+	struct snapshotDatabase header;
+	struct db *db;
+	sqlite3_vfs *vfs;
+	int exists;
+	int rv;
+
+	rv = snapshotDatabase__decode(cursor, &header);
+	if (rv != 0) {
+		return rv;
+	}
+	rv = registry__db_get(f->registry, header.filename, &db);
+	if (rv != 0) {
+		return rv;
+	}
+
+	vfs = sqlite3_vfs_find(db->config->name);
+
+	/* Check if the database file exists, and create it by opening a
+	 * connection if it doesn't. */
+	rv = vfs->xAccess(vfs, db->path, 0, &exists);
+	assert(rv == 0);
+
+	if (!exists) {
+		rv = db__open_follower(db);
+		if (rv != 0) {
+			return rv;
+		}
+		sqlite3_close(db->follower);
+		db->follower = NULL;
+	}
+
+	/* The last check can overflow, but we would already be lost anyway, as
+	 * the raft snapshot restore API only supplies one buffer and the data
+	 * has to fit in size_t bytes anyway. */
+	if (header.main_size > SIZE_MAX || header.wal_size > SIZE_MAX ||
+	    header.main_size + header.wal_size > SIZE_MAX) {
+		tracef("main_size:%" PRIu64 "B wal_size:%" PRIu64
+		       "B would overflow max DB size (%zuB)",
+		       header.main_size, header.wal_size, SIZE_MAX);
+		return -1;
+	}
+
+	/* Due to the check above, these casts are safe. */
+	rv = VfsDiskRestore(vfs, db->path, cursor->p, (size_t)header.main_size,
+			    (size_t)header.wal_size);
+	if (rv != 0) {
+		tracef("VfsDiskRestore %d", rv);
+		return rv;
+	}
+
+	cursor->p += header.main_size + header.wal_size;
+	*filename = header.filename;
+	return 0;
+}
+
+static int fsm__pre_snapshot_put_disk(struct raft_fsm *fsm,
+				      struct raft_io *io,
+				      struct raft_io_snapshot_put *put,
+				      struct raft_snapshot *snapshot,
+				      raft_io_snapshot_put_cb cb)
+{
+	struct fsm *f = fsm->data;
+	struct raft_buffer *buf;
+	struct cursor cursor;
+	void *new_base;
+	size_t new_len;
+	struct snapshotHeader header;
+	const char *filename;
+	unsigned i;
+	int rv;
+
+	assert(snapshot->n_bufs == 1);
+	buf = &snapshot->bufs[0];
+	cursor.p = buf->base;
+	cursor.cap = buf->len;
+
+	rv = snapshotHeader__decode(&cursor, &header);
+	if (rv != 0) {
+		tracef("decode failed %d", rv);
+		return rv;
+	}
+	if (header.format != SNAPSHOT_FORMAT) {
+		tracef("bad format");
+		return RAFT_MALFORMED;
+	}
+
+	new_len = 0;
+	for (i = 0; i < header.n; i++) {
+		rv = decodeDiskDatabase(f, &filename, &cursor);
+		new_len += strlen(filename) + 1;
+		if (rv != 0) {
+			tracef("decode failed");
+			return rv;
+		}
+	}
+
+	/* replace it */
+	new_base = raft_malloc(new_len);
+	if (new_base == NULL) {
+		/* XXX */
+		abort();
+	}
+	raft_free(buf->base);
+	buf->base = new_base;
+	buf->len = new_len;
+
+	/* XXX continue */
+	return io->snapshot_put(io, 0, put, snapshot, cb);
+}
+
 static int fsm__post_snapshot_get_disk(struct raft_fsm *fsm,
-				       struct raft_io *io,
 				       struct raft_io_snapshot_get *get,
 				       struct raft_snapshot *snapshot,
 				       raft_io_snapshot_get_cb cb)
@@ -945,8 +1062,6 @@ static int fsm__post_snapshot_get_disk(struct raft_fsm *fsm,
 	uint32_t n_pages;
 	void *cursor;
 	int rv;
-
-	(void)io;
 
 	assert(snapshot->n_bufs == 1);
 	assert(snapshot->bufs[0].len >= 4);
@@ -1047,6 +1162,7 @@ int fsm__init_disk(struct raft_fsm *fsm,
 	fsm->snapshot_async = NULL;
 	fsm->snapshot_finalize = fsm__snapshot_finalize_disk;
 	fsm->restore = fsm__restore_disk;
+	fsm->pre_snapshot_put = fsm__pre_snapshot_put_disk;
 	fsm->post_snapshot_get = fsm__post_snapshot_get_disk;
 
 	return 0;
