@@ -266,6 +266,7 @@ static int handle_open(struct gateway *g, struct handle *req)
 	struct cursor *cursor = &req->cursor;
 	struct db *db;
 	int rc;
+	assert(0);
 	START_V0(open, db);
 	if (g->leader != NULL) {
 		tracef("already open");
