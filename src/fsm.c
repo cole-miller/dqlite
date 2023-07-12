@@ -84,6 +84,55 @@ static int databaseReadUnlock(struct db *db)
 	}
 }
 
+static int doCheckpointForRealDisk(struct db *db)
+{
+	struct sqlite3_file *main_f;
+	volatile void *region;
+	int wal_size;
+	int ckpt;
+	int i;
+	int rv;
+
+	/* Get the database file associated with this db->follower connection */
+	rv = sqlite3_file_control(db->follower, "main",
+				  SQLITE_FCNTL_FILE_POINTER, &main_f);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	/* Get the first SHM region, which contains the WAL header. */
+	rv = main_f->pMethods->xShmMap(main_f, 0, 0, 0, &region);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	rv = main_f->pMethods->xShmUnmap(main_f, 0);
+	assert(rv == SQLITE_OK); /* Should never fail */
+
+	/* Try to acquire all locks. */
+	for (i = 0; i < SQLITE_SHM_NLOCK; i++) {
+		int flags = SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE;
+
+		rv = main_f->pMethods->xShmLock(main_f, i, 1, flags);
+		if (rv == SQLITE_BUSY) {
+			tracef("busy reader or writer - retry next time");
+			return rv;
+		}
+
+		/* Not locked. Let's release the lock we just
+		 * acquired. */
+		flags = SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE;
+		main_f->pMethods->xShmLock(main_f, i, 1, flags);
+	}
+
+	rv = sqlite3_wal_checkpoint_v2(
+	    db->follower, "main", SQLITE_CHECKPOINT_TRUNCATE, &wal_size, &ckpt);
+	assert(rv == 0);
+	tracef("sqlite3_wal_checkpoint_v2 success");
+
+	/* Since no reader transaction is in progress, we must be able to
+	 * checkpoint the entire WAL */
+	assert(wal_size == 0);
+	assert(ckpt == 0);
+	return 0;
+}
+
 static void doCheckpointForReal(struct db *db)
 {
 	struct sqlite3_file *main_f;
@@ -780,29 +829,9 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 	QUEUE__FOREACH(head, &f->registry->dbs)
 	{
 		db = QUEUE__DATA(head, struct db, queue);
-		if (db->tx_id != 0 || db->read_lock) {
+		if (db->tx_id != 0) {
 			return RAFT_BUSY;
 		}
-	}
-
-	/* Lock all databases, preventing the checkpoint from running. This
-	 * ensures the database is not written while it is mmap'ed and copied by
-	 * raft. */
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		db = QUEUE__DATA(head, struct db, queue);
-		rv = databaseReadLock(db);
-		assert(rv == 0);
-	}
-
-	if (db->follower == NULL) {
-		rv = db__open_follower(db);
-		if (rv != 0) {
-			tracef("open follower failed %d", rv);
-			/* XXX */
-			abort();
-		}
-		opened_follower = true;
 	}
 
 	/* Checkpoint every database */
@@ -811,14 +840,32 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 	{
 		db = QUEUE__DATA(head, struct db, queue);
 		/* XXX need to do something about errors here */
-		doCheckpointForReal(db);
+		if (db->follower == NULL) {
+			rv = db__open_follower(db);
+			if (rv != 0) {
+				tracef("open follower failed %d", rv);
+				abort();
+			}
+			opened_follower = true;
+		}
+		// TODO This should first try to acquire all locks on all
+		// databases before actually checkpointing any.
+		rv = doCheckpointForRealDisk(db);
+		if (rv != 0) {
+			tracef("checkpoint failed %d", rv);
+			return rv;
+		}
 		n_db += 1;
+		if (opened_follower) {
+			sqlite3_close(db->follower);
+			db->follower = NULL;
+		}
 	}
 
 	/* Make up a pseudo-snapshot for raft: a bunch of null-terminated
 	 * filenames
 	 *
-	 * TODO does the fake raft snapshot also need a header? */
+	 * TODO does the fake raft snapshot also need a header? -> yup handy */
 	*n_bufs = 1 + n_db;
 	*bufs = sqlite3_malloc64(*n_bufs * sizeof **bufs);
 	if (*bufs == NULL) {
@@ -847,11 +894,6 @@ static int fsm__snapshot_disk(struct raft_fsm *fsm,
 		i += 1;
 	}
 
-	if (opened_follower) {
-		sqlite3_close(db->follower);
-		db->follower = NULL;
-	}
-
 	return 0;
 }
 
@@ -859,13 +901,9 @@ static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
 				       struct raft_buffer *bufs[],
 				       unsigned *n_bufs)
 {
-	struct fsm *f = fsm->data;
-	struct db *db;
+	(void) fsm;
 	unsigned i;
 	uint32_t orig_n_db;
-	unsigned n_db;
-	queue *head;
-	int rv;
 
 	if (bufs == NULL) {
 		return 0;
@@ -873,34 +911,15 @@ static int fsm__snapshot_finalize_disk(struct raft_fsm *fsm,
 
 	orig_n_db = ByteGetBe32((*bufs)[0].base);
 
-	assert(*n_bufs == 1 + 2 * orig_n_db);
+	assert(*n_bufs == 1 + orig_n_db);
 
 	sqlite3_free((*bufs)[0].base);
 	for (i = 0; i < orig_n_db; i += 1) {
-		sqlite3_free((*bufs)[1 + 2 * i].base);
-		rv = munmap((*bufs)[2 + 2 * i].base, (*bufs)[2 + 2 * i].len);
-		if (rv != 0) {
-			/* XXX */
-			abort();
-		}
+		sqlite3_free((*bufs)[1 +  i].base);
 	}
 	sqlite3_free(*bufs);
 	*n_bufs = 0;
 	*bufs = NULL;
-
-	/* Unlock all databases that were locked for the snapshot, this is safe
-	 * because DB's are only ever added at the back of the queue. */
-	n_db = 0;
-	QUEUE__FOREACH(head, &f->registry->dbs)
-	{
-		if (n_db == orig_n_db) {
-			break;
-		}
-		db = QUEUE__DATA(head, struct db, queue);
-		rv = databaseReadUnlock(db);
-		assert(rv == 0);
-		n_db++;
-	}
 
 	return 0;
 }
