@@ -20,20 +20,18 @@ void VfsClose(struct sqlite3_vfs *vfs);
 
 /* Check if the last sqlite3_step() call triggered a write transaction, and
  * return its content if so. */
-int VfsPoll(sqlite3_vfs *vfs,
-	    const char *database,
+int VfsPoll(sqlite3_file *f,
 	    dqlite_vfs_frame **frames,
 	    unsigned *n);
 
 /* Append the given frames to the WAL. */
-int VfsApply(sqlite3_vfs *vfs,
-	     const char *filename,
+int VfsApply(sqlite3_file *file,
 	     unsigned n,
 	     unsigned long *page_numbers,
 	     void *frames);
 
 /* Cancel a pending transaction. */
-int VfsAbort(sqlite3_vfs *vfs, const char *filename);
+void VfsAbort(sqlite3_file *file);
 
 /* Make a full snapshot of a database. */
 int VfsSnapshot(sqlite3_vfs *vfs, const char *filename, void **data, size_t *n);
@@ -76,12 +74,11 @@ int VfsDatabaseNumPages(sqlite3_vfs *vfs, const char *filename, uint32_t *n);
 
 /* Returns the resulting size of the main file, wal file and n additional WAL
  * frames with the specified page_size. */
-uint64_t VfsDatabaseSize(sqlite3_vfs *vfs,
-			 const char *path,
+uint64_t VfsDatabaseSize(sqlite3_file *file,
 			 unsigned n,
 			 unsigned page_size);
 
 /* Returns the the maximum size of the main file and wal file. */
-uint64_t VfsDatabaseSizeLimit(sqlite3_vfs *vfs);
+uint64_t VfsDatabaseSizeLimit(sqlite3_file *file);
 
 #endif /* VFS_H_ */

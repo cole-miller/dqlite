@@ -187,10 +187,9 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 {
 	tracef("fsm apply frames");
 	struct db *db;
-	sqlite3_vfs *vfs;
+	sqlite3_file *file;
 	unsigned long *page_numbers = NULL;
 	void *pages;
-	int exists;
 	int rv;
 
 	rv = registry__db_get(f->registry, c->filename, &db);
@@ -199,22 +198,14 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 		return rv;
 	}
 
-	vfs = sqlite3_vfs_find(db->config->name);
-
-	/* Check if the database file exists, and create it by opening a
-	 * connection if it doesn't. */
-	rv = vfs->xAccess(vfs, db->path, 0, &exists);
-	assert(rv == 0);
-
-	if (!exists) {
-		rv = db__open_follower(db);
-		if (rv != 0) {
-			tracef("open follower failed %d", rv);
-			return rv;
-		}
-		sqlite3_close(db->follower);
-		db->follower = NULL;
+	rv = db__open_follower(db);
+	if (rv != 0) {
+		tracef("open follower failed %d", rv);
+		return rv;
 	}
+	rv = sqlite3_file_control(db->follower, "main",
+				  SQLITE_FCNTL_FILE_POINTER, &file);
+	assert(rv == SQLITE_OK);
 
 	rv = command_frames__page_numbers(c, &page_numbers);
 	if (rv != 0) {
@@ -222,7 +213,7 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 			sqlite3_free(page_numbers);
 		}
 		tracef("page numbers failed %d", rv);
-		return rv;
+		goto err_after_open_follower;
 	}
 
 	command_frames__pages(c, &pages);
@@ -238,16 +229,15 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 					       db->config->page_size);
 			if (rv != 0) {
 				tracef("malloc");
-				sqlite3_free(page_numbers);
-				return DQLITE_NOMEM;
+				rv = DQLITE_NOMEM;
+				goto err_after_alloc_page_numbers;
 			}
 			rv =
-			    VfsApply(vfs, db->path, f->pending.n_pages,
+			    VfsApply(file, f->pending.n_pages,
 				     f->pending.page_numbers, f->pending.pages);
 			if (rv != 0) {
 				tracef("VfsApply failed %d", rv);
-				sqlite3_free(page_numbers);
-				return rv;
+				goto err_after_alloc_page_numbers;
 			}
 			sqlite3_free(f->pending.page_numbers);
 			sqlite3_free(f->pending.pages);
@@ -255,12 +245,11 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 			f->pending.page_numbers = NULL;
 			f->pending.pages = NULL;
 		} else {
-			rv = VfsApply(vfs, db->path, c->frames.n_pages,
-				      page_numbers, pages);
+			rv = VfsApply(file, c->frames.n_pages, page_numbers,
+				      pages);
 			if (rv != 0) {
 				tracef("VfsApply failed %d", rv);
-				sqlite3_free(page_numbers);
-				return rv;
+				goto err_after_alloc_page_numbers;
 			}
 		}
 	} else {
@@ -269,14 +258,23 @@ static int apply_frames(struct fsm *f, const struct command_frames *c)
 				      db->config->page_size);
 		if (rv != 0) {
 			tracef("add pending pages failed %d", rv);
-			sqlite3_free(page_numbers);
-			return DQLITE_NOMEM;
+			rv = DQLITE_NOMEM;
+			goto err_after_alloc_page_numbers;
 		}
 	}
 
 	sqlite3_free(page_numbers);
 	maybeCheckpoint(db);
 	return 0;
+
+err_after_alloc_page_numbers:
+	sqlite3_free(page_numbers);
+
+err_after_open_follower:
+	sqlite3_close(db->follower);
+	db->follower = NULL;
+
+	return rv;
 }
 
 static int apply_undo(struct fsm *f, const struct command_undo *c)

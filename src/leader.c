@@ -237,7 +237,11 @@ static void leaderApplyFramesCb(struct raft_apply *req,
 {
 	tracef("apply frames cb id:%" PRIu64, idExtract(req->req_id));
 	struct apply *apply = req->data;
-	struct leader *l = apply->leader;
+	struct leader *l;
+	sqlite3_file *file;
+	int rv;
+
+	l = apply->leader;
 	if (l == NULL) {
 		raft_free(apply);
 		return;
@@ -245,9 +249,12 @@ static void leaderApplyFramesCb(struct raft_apply *req,
 
 	(void)result;
 
+	rv = sqlite3_file_control(l->conn, "main", SQLITE_FCNTL_FILE_POINTER,
+				  &file);
+	assert(rv == SQLITE_OK);
+
 	if (status != 0) {
 		tracef("apply frames cb failed status %d", status);
-		sqlite3_vfs *vfs = sqlite3_vfs_find(l->db->config->name);
 		switch (status) {
 			case RAFT_LEADERSHIPLOST:
 				l->exec->status = SQLITE_IOERR_LEADERSHIP_LOST;
@@ -273,7 +280,7 @@ static void leaderApplyFramesCb(struct raft_apply *req,
 				l->exec->status = SQLITE_IOERR;
 				break;
 		}
-		VfsAbort(vfs, l->db->path);
+		VfsAbort(file);
 	}
 
 	raft_free(apply);
@@ -351,24 +358,27 @@ static void leaderExecV2(struct exec *req)
 	tracef("leader exec v2 id:%" PRIu64, req->id);
 	struct leader *l = req->leader;
 	struct db *db = l->db;
-	sqlite3_vfs *vfs = sqlite3_vfs_find(db->config->name);
+	sqlite3_file *file;
 	dqlite_vfs_frame *frames;
 	uint64_t size;
 	unsigned n;
 	unsigned i;
 	int rv;
 
+	rv = sqlite3_file_control(l->conn, "main", SQLITE_FCNTL_FILE_POINTER,
+				  &file);
+	assert(rv == SQLITE_OK);
+
 	req->status = sqlite3_step(req->stmt);
 
-	rv = VfsPoll(vfs, db->path, &frames, &n);
+	rv = VfsPoll(file, &frames, &n);
 	if (rv != 0 || n == 0) {
 		tracef("vfs poll");
 		goto finish;
 	}
 
-	/* Check if the new frames would create an overfull database */
-	size = VfsDatabaseSize(vfs, db->path, n, db->config->page_size);
-	if (size > VfsDatabaseSizeLimit(vfs)) {
+	size = VfsDatabaseSize(file, n, db->config->page_size);
+	if (size > VfsDatabaseSizeLimit(file)) {
 		rv = SQLITE_FULL;
 		goto abort;
 	}
@@ -389,7 +399,7 @@ abort:
 		sqlite3_free(frames[i].data);
 	}
 	sqlite3_free(frames);
-	VfsAbort(vfs, l->db->path);
+	VfsAbort(file);
 finish:
 	if (rv != 0) {
 		tracef("exec v2 failed %d", rv);
