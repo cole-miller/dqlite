@@ -42,13 +42,21 @@
 static const uint32_t invalid_magic = 0x17171717;
 
 enum {
+	/* Entry for the database hasn't been set up yet. */
 	WTX_CLOSED,
+	/* The next write to the WAL will be a header write. Leader/nonleader. */
 	WTX_EMPTY,
+	/* WAL header has been written, at least one transaction in the WAL is uncommitted. Nonleader. */
 	WTX_FOLLOWING,
+	/* WAL header has been written, all transactions in the WAL are committed. Nonleader. */
 	WTX_FLUSH,
+	/* WAL header has been written, all transactions in the WAL are committed. Leader. */
 	WTX_BASE,
+	/* Write transaction in progress. Leader. */
 	WTX_ACTIVE,
+	/* Write transaction completed and masked by the WAL index. Leader. */
 	WTX_HIDDEN,
+	/* Write transaction completed, masked, and frames polled. Leader. */
 	WTX_POLLED
 };
 
@@ -186,14 +194,6 @@ struct wal_index_full_hdr {
 	uint8_t locks[SQLITE_SHM_NLOCK];
 	uint32_t nBackfillAttempted;
 	uint8_t unused[4];
-};
-
-/**
- * View of the zeroth shm region, which contains the WAL index header.
- */
-union vfs2_shm_region0 {
-	struct wal_index_full_hdr hdr;
-	char bytes[VFS2_WAL_INDEX_REGION_SIZE];
 };
 
 struct entry {
