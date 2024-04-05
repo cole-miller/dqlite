@@ -43,15 +43,6 @@ static void *setUp(const MunitParameter params[], void *user_data)
 	rv = dqlite_node_set_bind_address(f->node, "@123");
 	munit_assert_int(rv, ==, 0);
 
-	const char *disk_mode_param = munit_parameters_get(params, "disk_mode");
-	if (disk_mode_param != NULL) {
-		bool disk_mode = (bool)atoi(disk_mode_param);
-		if (disk_mode) {
-			rv = dqlite_node_enable_disk_mode(f->node);
-			munit_assert_int(rv, ==, 0);
-		}
-	}
-
 	return f;
 }
 
@@ -69,15 +60,6 @@ static void *setUpInet(const MunitParameter params[], void *user_data)
 
 	rv = dqlite_node_set_bind_address(f->node, "127.0.0.1:9001");
 	munit_assert_int(rv, ==, 0);
-
-	const char *disk_mode_param = munit_parameters_get(params, "disk_mode");
-	if (disk_mode_param != NULL) {
-		bool disk_mode = (bool)atoi(disk_mode_param);
-		if (disk_mode) {
-			rv = dqlite_node_enable_disk_mode(f->node);
-			munit_assert_int(rv, ==, 0);
-		}
-	}
 
 	return f;
 }
@@ -103,15 +85,6 @@ static void *setUpForRecovery(const MunitParameter params[], void *user_data)
 
 	rv = dqlite_node_set_bind_address(f->node, "@123");
 	munit_assert_int(rv, ==, 0);
-
-	const char *disk_mode_param = munit_parameters_get(params, "disk_mode");
-	if (disk_mode_param != NULL) {
-		bool disk_mode = (bool)atoi(disk_mode_param);
-		if (disk_mode) {
-			rv = dqlite_node_enable_disk_mode(f->node);
-			munit_assert_int(rv, ==, 0);
-		}
-	}
 
 	return f;
 }

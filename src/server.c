@@ -435,30 +435,6 @@ int dqlite_node_set_block_size(dqlite_node *n, size_t size)
 	raft_uv_set_block_size(&n->raft_io, size);
 	return 0;
 }
-int dqlite_node_enable_disk_mode(dqlite_node *n)
-{
-	int rv;
-
-	if (n->running) {
-		return DQLITE_MISUSE;
-	}
-
-	rv = VfsEnableDisk(&n->vfs);
-	if (rv != 0) {
-		return rv;
-	}
-
-	n->registry.config->disk = true;
-
-	/* Close the default fsm and initialize the disk one. */
-	fsm__close(&n->raft_fsm);
-	rv = fsm__init_disk(&n->raft_fsm, &n->config, &n->registry);
-	if (rv != 0) {
-		return rv;
-	}
-
-	return 0;
-}
 
 static int maybeBootstrap(dqlite_node *d,
 			  dqlite_node_id id,
