@@ -16,6 +16,8 @@
 
 #define DQLITE_ERRMSG_BUF_SIZE 300
 
+#define DQLITE_VFS_NAME "dqlite-vfs2"
+
 /**
  * A single dqlite server instance.
  */
@@ -24,7 +26,6 @@ struct dqlite_node {
 
 	pthread_t thread;                        /* Main run loop thread. */
 	struct config config;                    /* Config values */
-	struct sqlite3_vfs vfs;                  /* In-memory VFS */
 	struct registry registry;                /* Databases */
 	struct uv_loop_s loop;                   /* UV loop */
 	struct pool_s pool;                      /* Thread pool */

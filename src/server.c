@@ -23,7 +23,7 @@
 #include "translate.h"
 #include "transport.h"
 #include "utils.h"
-#include "vfs.h"
+#include "vfs2.h"
 
 /* Special ID for the bootstrap node. Equals to raft_digest("1", 0). */
 #define BOOTSTRAP_ID 0x2dc171858c3155be
@@ -61,6 +61,7 @@ int dqlite__init(struct dqlite_node *d,
 	char db_dir_path[1024];
 	int urandom;
 	ssize_t count;
+	sqlite3_vfs *vfs;
 
 	d->initialized = false;
 	memset(d->errmsg, 0, sizeof d->errmsg);
@@ -78,8 +79,8 @@ int dqlite__init(struct dqlite_node *d,
 			 "config__init(rv:%d)", rv);
 		goto err;
 	}
-	rv = VfsInit(&d->vfs, d->config.name);
-	sqlite3_vfs_register(&d->vfs, 0);
+	vfs = vfs2_make(sqlite3_vfs_find("unix"), DQLITE_VFS_NAME);
+	sqlite3_vfs_register(vfs, 0);
 	if (rv != 0) {
 		goto err_after_config_init;
 	}
@@ -191,7 +192,8 @@ err_after_pool_init:
 err_after_loop_init:
 	uv_loop_close(&d->loop);
 err_after_vfs_init:
-	VfsClose(&d->vfs);
+	sqlite3_vfs_unregister(vfs);
+	vfs2_destroy(vfs);
 err_after_config_init:
 	config__close(&d->config);
 err:
@@ -220,8 +222,9 @@ void dqlite__close(struct dqlite_node *d)
 	uv_loop_close(&d->loop);
 	raftProxyClose(&d->raft_transport);
 	registry__close(&d->registry);
-	sqlite3_vfs_unregister(&d->vfs);
-	VfsClose(&d->vfs);
+	sqlite3_vfs *vfs = sqlite3_vfs_find(DQLITE_VFS_NAME);
+	sqlite3_vfs_unregister(vfs);
+	vfs2_destroy(vfs);
 	config__close(&d->config);
 	if (d->bind_address != NULL) {
 		sqlite3_free(d->bind_address);
