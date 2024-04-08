@@ -586,9 +586,14 @@ struct raft_io
  * routines themselves.
  */
 
+struct raft_fsm; /* Forward declaration */
+
+typedef void (*raft_fsm_post_receive_cb)(struct raft_buffer buf, int status);
+typedef void (*raft_fsm_pre_send_cb)(int status);
+
 struct raft_fsm
 {
-	int version; /* 1, 2 or 3 */
+	int version; /* 1, 2, 3, or 4 */
 	void *data;
 	int (*apply)(struct raft_fsm *fsm,
 		     const struct raft_buffer *buf,
@@ -605,6 +610,11 @@ struct raft_fsm
 	int (*snapshot_async)(struct raft_fsm *fsm,
 			      struct raft_buffer *bufs[],
 			      unsigned *n_bufs);
+	/* Fields below added since version 4. */
+	int (*post_receive)(struct raft_fsm *fsm,
+			    struct raft_entry entry,
+			    raft_fsm_post_receive_cb cb);
+
 };
 
 struct raft; /* Forward declaration. */

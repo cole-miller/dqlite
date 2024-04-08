@@ -1,11 +1,13 @@
 #include "lib/assert.h"
 #include "lib/serialize.h"
+#include "lib/threadpool.h"
 
 #include "command.h"
 #include "fsm.h"
 #include "raft.h"
 #include "tracing.h"
 #include "vfs.h"
+#include "vfs2.h"
 
 #include <sys/mman.h>
 
@@ -19,6 +21,7 @@ struct fsm
 		unsigned long *page_numbers;
 		uint8_t *pages;
 	} pending; /* For upgrades from V1 */
+	pool_t *pool;
 };
 
 static int apply_open(struct fsm *f, const struct command_open *c)
@@ -1158,6 +1161,137 @@ int fsm__init_disk(struct raft_fsm *fsm,
 	fsm->snapshot_async = fsm__snapshot_async_disk;
 	fsm->snapshot_finalize = fsm__snapshot_finalize_disk;
 	fsm->restore = fsm__restore_disk;
+
+	return 0;
+}
+
+struct post_receive_req {
+	pool_work_t work;
+
+	struct raft_entry entry;
+
+	sqlite3 *conn;
+	uint32_t page_size;
+	struct vfs2_wal_frame *frames;
+	uint32_t n;
+
+	struct raft_buffer new_buffer;
+
+	raft_fsm_post_receive_cb cb;
+};
+
+static void post_receive_work_cb(pool_work_t *w)
+{
+	struct post_receive_req *req = CONTAINER_OF(w, struct post_receive_req, work);
+	struct vfs2_wal_slice sl = {};
+
+	sqlite3_file *fp;
+	sqlite3_file_control(req->conn, "main", SQLITE_FCNTL_FILE_POINTER, &fp);
+
+	int rv = vfs2_apply_uncommitted(fp, req->page_size, req->frames, req->n, &sl);
+	if (rv != 0) {
+		req->work.rc = RAFT_IOERR;
+		return;
+	}
+
+	static_assert(sizeof(sl) % sizeof(uint64_t) == 0, "underaligned vfs2_wal_slice");
+	struct raft_buffer old_buf = req->entry.buf;
+	struct raft_buffer new_buf;
+	new_buf.base = raft_malloc(sizeof(sl) + old_buf.len);
+	if (new_buf.base == NULL) {
+		req->work.rc = RAFT_NOMEM;
+		return;
+	}
+	size_t k = 0;
+	memcpy(new_buf.base + k, &sl, sizeof(sl));
+	k += sizeof(sl);
+	memcpy(new_buf.base + k, old_buf.base, old_buf.len);
+	k += old_buf.len;
+	new_buf.len = k;
+
+	req->new_buffer = new_buf;
+	req->work.rc = 0;
+}
+
+static void post_receive_after_work_cb(pool_work_t *w)
+{
+	struct post_receive_req *req = CONTAINER_OF(w, struct post_receive_req, work);
+	raft_fsm_post_receive_cb cb = req->cb;
+	struct raft_buffer new_buffer = req->new_buffer;
+	int rc = req->work.rc;
+	sqlite3_free(req->frames);
+	sqlite3_free(req);
+	cb(new_buffer, rc);
+}
+
+int fsm_vfs2_post_receive(struct raft_fsm *fsm,
+			  struct raft_entry entry,
+			  raft_fsm_post_receive_cb cb)
+{
+	struct fsm *f = fsm->data;
+
+	int type;
+	void *cmd;
+	int rv = command__decode(&entry.buf, &type, &cmd);
+	if (rv != 0) {
+		return rv;
+	}
+	if (type != COMMAND_FRAMES) {
+		cb((struct raft_buffer){}, 0);
+	}
+	struct command_frames *cf = cmd;
+
+	struct db *db;
+	rv = registry__db_get(f->registry, cf->filename, &db);
+	if (rv != 0) {
+		return rv;
+	}
+
+	uint32_t n = cf->frames.n_pages;
+	/* XXX */
+	uint32_t page_size = cf->frames.page_size;
+
+	struct vfs2_wal_frame *frames = sqlite3_malloc64(n * sizeof(*frames));
+	if (frames == NULL) {
+		return DQLITE_NOMEM;
+	}
+
+	/* XXX these don't need to allocate, skip the decoding indirection */
+	unsigned long *pgnos;
+	rv = command_frames__page_numbers(cf, &pgnos);
+	if (rv != 0) {
+		return rv;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		frames[i].page_number = (uint32_t)pgnos[i];
+	}
+	sqlite3_free(pgnos);
+
+	uint64_t *commits;
+	rv = command_frames_page_commits(cf, &commits);
+	if (rv != 0) {
+		return rv;
+	}
+	for (uint32_t i = 0; i < n; i++) {
+		frames[i].commit = (uint32_t)commits[i];
+	}
+	sqlite3_free(commits);
+
+	void *pages;
+	command_frames__pages(cf, &pages);
+	for (uint32_t i = 0; i < n; i++) {
+		frames[i].page = pages + i * page_size;
+	}
+
+	struct post_receive_req *req = sqlite3_malloc(sizeof(*req));
+	if (req == NULL) {
+		return RAFT_NOMEM;
+	}
+	req->conn = db->follower;
+	req->page_size = page_size;
+	req->frames = frames;
+	req->n = n;
+	pool_queue_work(f->pool, &req->work, db->cookie, WT_UNORD, post_receive_work_cb, post_receive_after_work_cb);
 
 	return 0;
 }
