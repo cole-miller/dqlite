@@ -6,6 +6,7 @@
 
 #include "command.h"
 #include "protocol.h"
+#include "vfs2.h"
 
 #define FORMAT 1 /* Format version */
 
@@ -25,6 +26,7 @@ static size_t frames__sizeof(const frames_t *frames)
 		   uint16__sizeof(&frames->page_size) +
 		   uint16__sizeof(&frames->__unused__) +
 		   sizeof(uint64_t) * frames->n_pages + /* Page numbers */
+		   sizeof(uint64_t) * frames->n_pages + /* Commit markers */
 		   frames->page_size * frames->n_pages; /* Page data */
 	return s;
 }
@@ -40,6 +42,10 @@ static void frames__encode(const frames_t *frames, char **cursor)
 	for (i = 0; i < frames->n_pages; i++) {
 		uint64_t pgno = list[i].page_number;
 		uint64__encode(&pgno, cursor);
+	}
+	for (i = 0; i < frames->n_pages; i++) {
+		uint64_t commit = 0;
+		uint64__encode(&commit, cursor);
 	}
 	for (i = 0; i < frames->n_pages; i++) {
 		memcpy(*cursor, list[i].data, frames->page_size);
@@ -162,8 +168,34 @@ int command_frames__page_numbers(const struct command_frames *c,
 	return 0;
 }
 
+int command_frames_page_commits(const struct command_frames *c,
+				 unsigned long *page_commits[])
+{
+	unsigned i;
+	struct cursor cursor;
+
+	cursor.p = c->frames.data + sizeof(uint64_t) * c->frames.n_pages;
+	cursor.cap = sizeof(uint64_t) * c->frames.n_pages;
+
+	*page_commits = sqlite3_malloc64(sizeof(**page_commits) * c->frames.n_pages);
+	if (*page_commits == NULL) {
+		return DQLITE_NOMEM;
+	}
+
+	for (i = 0; i < c->frames.n_pages; i++) {
+		uint64_t pgno;
+		int r = uint64__decode(&cursor, &pgno);
+		if (r != 0) {
+			return r;
+		}
+		(*page_commits)[i] = (unsigned long)pgno;
+	}
+
+	return 0;
+}
+
 void command_frames__pages(const struct command_frames *c, void **pages)
 {
 	*pages =
-	    (void *)(c->frames.data + (sizeof(uint64_t) * c->frames.n_pages));
+	    (void *)(c->frames.data + (2 * sizeof(uint64_t) * c->frames.n_pages));
 }

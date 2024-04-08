@@ -17,6 +17,7 @@ enum { COMMAND_OPEN = 1, COMMAND_FRAMES, COMMAND_UNDO, COMMAND_CHECKPOINT };
 struct frames
 {
 	uint32_t n_pages;
+	/* XXX make sure the edge case for page_size=1<<16 is handled here */
 	uint16_t page_size;
 	uint16_t __unused__;
 	/* TODO: because the sqlite3 replication APIs are asymmetrics, the
@@ -65,6 +66,8 @@ DQLITE_VISIBLE_TO_TESTS int command__decode(const struct raft_buffer *buf,
 DQLITE_VISIBLE_TO_TESTS int command_frames__page_numbers(
     const struct command_frames *c,
     unsigned long *page_numbers[]);
+
+int command_frames_page_commits(const struct command_frames *c, uint64_t *page_commits[]);
 
 DQLITE_VISIBLE_TO_TESTS void command_frames__pages(
     const struct command_frames *c,
