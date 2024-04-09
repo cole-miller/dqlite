@@ -1,5 +1,6 @@
 #include "lib/assert.h"
 #include "lib/serialize.h"
+#include "lib/threadpool.h"
 
 #include "command.h"
 #include "fsm.h"
@@ -19,6 +20,7 @@ struct fsm
 		unsigned long *page_numbers;
 		uint8_t *pages;
 	} pending; /* For upgrades from V1 */
+	pool_t *pool;
 };
 
 static int apply_open(struct fsm *f, const struct command_open *c)
@@ -712,7 +714,8 @@ static int fsm__restore(struct raft_fsm *fsm, struct raft_buffer *buf)
 
 int fsm__init(struct raft_fsm *fsm,
 	      struct config *config,
-	      struct registry *registry)
+	      struct registry *registry,
+	      pool_t *pool)
 {
 	tracef("fsm init");
 	struct fsm *f = raft_malloc(sizeof *f);
@@ -726,6 +729,7 @@ int fsm__init(struct raft_fsm *fsm,
 	f->pending.n_pages = 0;
 	f->pending.page_numbers = NULL;
 	f->pending.pages = NULL;
+	f->pool = pool;
 
 	fsm->version = 2;
 	fsm->data = f;

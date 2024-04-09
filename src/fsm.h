@@ -5,6 +5,8 @@
 #ifndef DQLITE_FSM_H_
 #define DQLITE_FSM_H_
 
+#include "lib/threadpool.h"
+
 #include "config.h"
 #include "raft.h"
 #include "registry.h"
@@ -15,7 +17,8 @@
  */
 int fsm__init(struct raft_fsm *fsm,
 	      struct config *config,
-	      struct registry *registry);
+	      struct registry *registry,
+	      pool_t *pool);
 
 /**
  * Initialize the given SQLite replication interface with dqlite's on-disk

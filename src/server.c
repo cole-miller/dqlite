@@ -112,7 +112,7 @@ int dqlite__init(struct dqlite_node *d,
 		rv = DQLITE_ERROR;
 		goto err_after_raft_transport_init;
 	}
-	rv = fsm__init(&d->raft_fsm, &d->config, &d->registry);
+	rv = fsm__init(&d->raft_fsm, &d->config, &d->registry, &d->pool);
 	if (rv != 0) {
 		goto err_after_raft_io_init;
 	}
