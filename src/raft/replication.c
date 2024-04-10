@@ -1060,9 +1060,9 @@ static int checkLogMatchingProperty(struct raft *r,
  * AppendEntries request. */
 static int deleteConflictingEntries(struct raft *r,
 				    const struct raft_append_entries *args,
-				    size_t *i)
+				    unsigned *i)
 {
-	size_t j;
+	unsigned j;
 	int rv;
 
 	for (j = 0; j < args->n_entries; j++) {
@@ -1120,17 +1120,142 @@ static int deleteConflictingEntries(struct raft *r,
 	return 0;
 }
 
+struct post_receive {
+	struct raft_fsm_post_receive base;
+	struct raft *raft;
+	struct raft_append_entries *args;
+	unsigned new_entries_start;
+};
+
+static void post_receive_cb(struct raft_fsm_post_receive *base, int status)
+{
+	struct post_receive *req = CONTAINER_OF(base, struct post_receive, base);
+	struct raft *r = req->raft;
+	struct raft_entry *entries = req->base.entries;
+	struct raft_append_entries *args = req->args;
+	size_t i = req->new_entries_start;
+	size_t n = req->base.entries_len;
+	size_t j;
+	int rv;
+
+	raft_free(req);
+	if (status != 0) {
+		/* TODO propagate? */
+		tracef("post_receive_cb failed (status %d)", status);
+		return;
+	}
+
+	struct appendFollower *request = raft_malloc(sizeof *request);
+	if (request == NULL) {
+		rv = RAFT_NOMEM;
+		goto err;
+	}
+
+	request->raft = r;
+	request->args = *args;
+	/* Index of first new entry */
+	request->index = args->prev_log_index + 1 + i;
+
+	/* Update our in-memory log to reflect that we received these entries.
+	 * We'll notify the leader of a successful append once the write entries
+	 * request that we issue below actually completes.  */
+	for (j = 0; j < n; j++) {
+		struct raft_entry *entry = &entries[j];
+
+		/* We are trying to append an entry at index X with term T to
+		 * our in-memory log. If we've gotten this far, we know that the
+		 * log *logically* has no entry at this index. However, it's
+		 * possible that we're still hanging on to such an entry,
+		 * because we previously tried to append and replicate it, and
+		 * the associated disk write failed, but some send requests are
+		 * still pending that refer to it. Since the log is not capable
+		 * of tracking multiple independent entries that share an index
+		 * and term, we just piggyback on the already-stored entry in
+		 * this case. */
+		bool reinstated;
+		rv =
+		    logReinstate(r->log, entry->term, entry->type, &reinstated);
+		if (rv != 0) {
+			goto err_after_request_alloc;
+		} else if (reinstated) {
+			continue;
+		}
+
+		/* TODO This copy should not strictly be necessary, as the batch
+		 * logic will take care of freeing the batch buffer in which the
+		 * entries are received. However, this would lead to memory
+		 * spikes in certain edge cases.
+		 * https://github.com/canonical/dqlite/issues/276
+		 */
+		struct raft_entry copy = {0};
+		rv = entryCopy(entry, &copy);
+		if (rv != 0) {
+			goto err_after_request_alloc;
+		}
+
+		rv = logAppend(r->log, copy.term, copy.type, &copy.buf, NULL);
+		if (rv != 0) {
+			goto err_after_request_alloc;
+		}
+	}
+
+	/* Acquire the relevant entries from the log. */
+	rv = logAcquire(r->log, request->index, &request->args.entries,
+			&request->args.n_entries);
+	if (rv != 0) {
+		goto err_after_request_alloc;
+	}
+
+	assert(request->args.n_entries == n);
+	if (request->args.n_entries == 0) {
+		tracef("No log entries found at index %llu", request->index);
+		ErrMsgPrintf(r->errmsg, "No log entries found at index %llu",
+			     request->index);
+		rv = RAFT_SHUTDOWN;
+		goto err_after_acquire_entries;
+	}
+
+	request->req.data = request;
+	rv = r->io->append(r->io, &request->req, request->args.entries,
+			   request->args.n_entries, appendFollowerCb);
+	if (rv != 0) {
+		ErrMsgTransfer(r->io->errmsg, r->errmsg, "io");
+		goto err_after_acquire_entries;
+	}
+	r->follower_state.append_in_flight_count += 1;
+
+	entryBatchesDestroy(args->entries, args->n_entries);
+	return;
+
+err_after_acquire_entries:
+	/* Release the entries related to the IO request */
+	logRelease(r->log, request->index, request->args.entries,
+		   request->args.n_entries);
+
+err_after_request_alloc:
+	/* Release all entries added to the in-memory log, making
+	 * sure the in-memory log and disk don't diverge, leading
+	 * to future log entries not being persisted to disk.
+	 */
+	if (j != 0) {
+		logTruncate(r->log, request->index);
+	}
+	raft_free(request);
+
+err:
+	assert(rv != 0);
+	tracef("replication append failed (status %d)", rv);
+	/* TODO propagate this error? */
+}
+
 int replicationAppend(struct raft *r,
 		      struct raft_append_entries *args,
 		      raft_index *rejected,
 		      bool *async)
 {
-	struct appendFollower *request;
 	int match;
-	size_t n;
-	size_t i;
-	size_t j;
-	bool reinstated;
+	unsigned n;
+	unsigned i;
 	int rv;
 
 	assert(r != NULL);
@@ -1188,105 +1313,19 @@ int replicationAppend(struct raft *r,
 
 	*async = true;
 
-	request = raft_malloc(sizeof *request);
-	if (request == NULL) {
-		rv = RAFT_NOMEM;
-		goto err;
+	assert(r->fsm->version >= 3);
+	assert(r->fsm->post_receive != NULL);
+	struct post_receive *req = raft_malloc(sizeof(*req));
+	if (req == NULL) {
+		return RAFT_NOMEM;
 	}
-
-	request->raft = r;
-	request->args = *args;
-	/* Index of first new entry */
-	request->index = args->prev_log_index + 1 + i;
-
-	/* Update our in-memory log to reflect that we received these entries.
-	 * We'll notify the leader of a successful append once the write entries
-	 * request that we issue below actually completes.  */
-	for (j = 0; j < n; j++) {
-		struct raft_entry *entry = &args->entries[i + j];
-
-		/* We are trying to append an entry at index X with term T to
-		 * our in-memory log. If we've gotten this far, we know that the
-		 * log *logically* has no entry at this index. However, it's
-		 * possible that we're still hanging on to such an entry,
-		 * because we previously tried to append and replicate it, and
-		 * the associated disk write failed, but some send requests are
-		 * still pending that refer to it. Since the log is not capable
-		 * of tracking multiple independent entries that share an index
-		 * and term, we just piggyback on the already-stored entry in
-		 * this case. */
-		rv =
-		    logReinstate(r->log, entry->term, entry->type, &reinstated);
-		if (rv != 0) {
-			goto err_after_request_alloc;
-		} else if (reinstated) {
-			continue;
-		}
-
-		/* TODO This copy should not strictly be necessary, as the batch
-		 * logic will take care of freeing the batch buffer in which the
-		 * entries are received. However, this would lead to memory
-		 * spikes in certain edge cases.
-		 * https://github.com/canonical/dqlite/issues/276
-		 */
-		struct raft_entry copy = {0};
-		rv = entryCopy(entry, &copy);
-		if (rv != 0) {
-			goto err_after_request_alloc;
-		}
-
-		rv = logAppend(r->log, copy.term, copy.type, &copy.buf, NULL);
-		if (rv != 0) {
-			goto err_after_request_alloc;
-		}
-	}
-
-	/* Acquire the relevant entries from the log. */
-	rv = logAcquire(r->log, request->index, &request->args.entries,
-			&request->args.n_entries);
-	if (rv != 0) {
-		goto err_after_request_alloc;
-	}
-
-	assert(request->args.n_entries == n);
-	if (request->args.n_entries == 0) {
-		tracef("No log entries found at index %llu", request->index);
-		ErrMsgPrintf(r->errmsg, "No log entries found at index %llu",
-			     request->index);
-		rv = RAFT_SHUTDOWN;
-		goto err_after_acquire_entries;
-	}
-
-	request->req.data = request;
-	rv = r->io->append(r->io, &request->req, request->args.entries,
-			   request->args.n_entries, appendFollowerCb);
-	if (rv != 0) {
-		ErrMsgTransfer(r->io->errmsg, r->errmsg, "io");
-		goto err_after_acquire_entries;
-	}
-	r->follower_state.append_in_flight_count += 1;
-
-	entryBatchesDestroy(args->entries, args->n_entries);
+	req->base.entries = args->entries + i;
+	req->base.entries_len = n;
+	req->raft = r;
+	req->args = args;
+	req->new_entries_start = i;
+	r->fsm->post_receive(r->fsm, (struct raft_fsm_post_receive *)req, post_receive_cb);
 	return 0;
-
-err_after_acquire_entries:
-	/* Release the entries related to the IO request */
-	logRelease(r->log, request->index, request->args.entries,
-		   request->args.n_entries);
-
-err_after_request_alloc:
-	/* Release all entries added to the in-memory log, making
-	 * sure the in-memory log and disk don't diverge, leading
-	 * to future log entries not being persisted to disk.
-	 */
-	if (j != 0) {
-		logTruncate(r->log, request->index);
-	}
-	raft_free(request);
-
-err:
-	assert(rv != 0);
-	return rv;
 }
 
 struct recvInstallSnapshot

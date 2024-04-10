@@ -560,12 +560,7 @@ struct raft_io
 };
 
 /**
- * version field MUST be filled out by user.
- * When moving to a new version, the user MUST initialize the new methods,
- * either with an implementation or with NULL.
- *
- * version 2:
- * introduces `snapshot_finalize`, when this method is not NULL, it will
+ * `snapshot_finalize`: when this method is not NULL, it will
  * always run after a successful call to `snapshot`, whether the snapshot has
  * been successfully written to disk or not. If it is set, raft will
  * assume no ownership of any of the `raft_buffer`s and the responsibility to
@@ -574,9 +569,7 @@ struct raft_io
  * a call to `snapshot`. Until `snapshot_finalize` is called, raft can access
  * the data contained in the `raft_buffer`s.
  *
- * version 3:
- * Adds support for async snapshots through the `snapshot_async` function.
- * When this method is provided, raft will call `snapshot` in the main loop,
+ * `snapshot_async`: When this method is provided, raft will call `snapshot` in the main loop,
  * and when successful, will call `snapshot_async` using the `io->async_work`
  * method, so blocking I/O calls are allowed in the implementation. After the
  * `snapshot_async` completes, `snapshot_finalize` will be called in the main
@@ -587,9 +580,16 @@ struct raft_io
  * routines themselves.
  */
 
+struct raft_fsm_post_receive {
+	struct raft_entry *entries;
+	unsigned entries_len;
+};
+
+typedef void (*raft_fsm_post_receive_cb)(struct raft_fsm_post_receive *req, int status);
+
 struct raft_fsm
 {
-	int version; /* 1, 2 or 3 */
+	int version; /* Always set this to 3 */
 	void *data;
 	int (*apply)(struct raft_fsm *fsm,
 		     const struct raft_buffer *buf,
@@ -598,14 +598,15 @@ struct raft_fsm
 			struct raft_buffer *bufs[],
 			unsigned *n_bufs);
 	int (*restore)(struct raft_fsm *fsm, struct raft_buffer *buf);
-	/* Fields below added since version 2. */
 	int (*snapshot_finalize)(struct raft_fsm *fsm,
 				 struct raft_buffer *bufs[],
 				 unsigned *n_bufs);
-	/* Fields below added since version 3. */
 	int (*snapshot_async)(struct raft_fsm *fsm,
 			      struct raft_buffer *bufs[],
 			      unsigned *n_bufs);
+	int (*post_receive)(struct raft_fsm *fsm,
+			    struct raft_fsm_post_receive *req,
+			    raft_fsm_post_receive_cb cb);
 };
 
 struct raft; /* Forward declaration. */
