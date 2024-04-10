@@ -218,8 +218,8 @@ struct raft_entry
 {
 	raft_term term;      /* Term in which the entry was created. */
 	unsigned short type; /* Type (FSM command, barrier, config change). */
-	struct raft_buffer local_buf; /* Populated locally after receiving a message, not sent. */
 	struct raft_buffer buf; /* Entry data. */
+	struct raft_buffer local_buf; /* Populated locally, persisted, not sent. */
 	void *batch;            /* Batch that buf's memory points to, if any. */
 };
 

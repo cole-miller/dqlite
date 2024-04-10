@@ -29,6 +29,8 @@ void uvDecodeEntriesBatch(uint8_t *batch,
 			  unsigned n);
 
 /**
+ * TODO update docstring for local bufs
+ *
  * The layout of the memory pointed at by a @batch pointer is the following:
  *
  * [8 bytes] Number of entries in the batch, little endian.
@@ -50,10 +52,11 @@ void uvDecodeEntriesBatch(uint8_t *batch,
  * arbitrary lengths, possibly padded with extra bytes to reach 8-byte boundary
  * (which means that all entry data pointers are 8-byte aligned).
  */
-size_t uvSizeofBatchHeader(size_t n);
+size_t uvSizeofBatchHeader(size_t n, bool include_local_bufs);
 
 void uvEncodeBatchHeader(const struct raft_entry *entries,
 			 unsigned n,
-			 void *buf);
+			 void *buf,
+			 bool include_local_bufs);
 
 #endif /* UV_ENCODING_H_ */

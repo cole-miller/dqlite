@@ -86,10 +86,14 @@ static size_t sizeofTimeoutNow(void)
 	       sizeof(uint64_t) /* Last log term. */;
 }
 
-size_t uvSizeofBatchHeader(size_t n)
+size_t uvSizeofBatchHeader(size_t n, bool include_local_bufs)
 {
-	return 8 + /* Number of entries in the batch, little endian */
-	       16 * n /* One header per entry */;
+	size_t res = 8 + /* Number of entries in the batch, little endian */
+		16 * n; /* One header per entry */;
+	if (include_local_bufs) {
+		res += 8 * n; /* Local buf length per entry */
+	}
+	return res;
 }
 
 static void encodeRequestVote(const struct raft_request_vote *p, void *buf)
@@ -137,7 +141,7 @@ static void encodeAppendEntries(const struct raft_append_entries *p, void *buf)
 	bytePut64(&cursor, p->prev_log_term);  /* Previous term. */
 	bytePut64(&cursor, p->leader_commit);  /* Commit index. */
 
-	uvEncodeBatchHeader(p->entries, p->n_entries, cursor);
+	uvEncodeBatchHeader(p->entries, p->n_entries, cursor, false /* no local bufs */);
 }
 
 static void encodeAppendEntriesResult(
@@ -295,7 +299,8 @@ oom:
 
 void uvEncodeBatchHeader(const struct raft_entry *entries,
 			 unsigned n,
-			 void *buf)
+			 void *buf,
+			 bool include_local_bufs)
 {
 	unsigned i;
 	void *cursor = buf;
@@ -316,6 +321,10 @@ void uvEncodeBatchHeader(const struct raft_entry *entries,
 
 		/* Size of the log entry data, little endian. */
 		bytePut32(&cursor, (uint32_t)entry->buf.len);
+
+		if (include_local_bufs) {
+			bytePut64(&cursor, (uint64_t)entry->local_buf.len);
+		}
 	}
 }
 

@@ -266,11 +266,11 @@ static int uvLoadEntriesBatch(struct uv *uv,
 
 	/* Consume the batch header, excluding the first 8 bytes containing the
 	 * number of entries, which we have already read. */
-	header.len = uvSizeofBatchHeader(n);
+	header.len = uvSizeofBatchHeader(n, true);
 	header.base = batch;
 
 	rv = uvConsumeContent(content, offset,
-			      uvSizeofBatchHeader(n) - sizeof(uint64_t), NULL,
+			      uvSizeofBatchHeader(n, true) - sizeof(uint64_t), NULL,
 			      errmsg);
 	if (rv != 0) {
 		ErrMsgTransfer(errmsg, uv->io->errmsg, "read header");
@@ -739,7 +739,7 @@ int uvSegmentBufferAppend(struct uvSegmentBuffer *b,
 	int rv;
 
 	size = sizeof(uint32_t) * 2;            /* CRC checksums */
-	size += uvSizeofBatchHeader(n_entries); /* Batch header */
+	size += uvSizeofBatchHeader(n_entries, true); /* Batch header */
 	for (i = 0; i < n_entries; i++) {       /* Entries data */
 		size += bytePad64(entries[i].buf.len);
 	}
@@ -758,9 +758,10 @@ int uvSegmentBufferAppend(struct uvSegmentBuffer *b,
 
 	/* Batch header */
 	header = cursor;
-	uvEncodeBatchHeader(entries, n_entries, cursor);
-	crc1 = byteCrc32(header, uvSizeofBatchHeader(n_entries), 0);
-	cursor = (uint8_t *)cursor + uvSizeofBatchHeader(n_entries);
+	/* use local bufs */
+	uvEncodeBatchHeader(entries, n_entries, cursor, true);
+	crc1 = byteCrc32(header, uvSizeofBatchHeader(n_entries, true), 0);
+	cursor = (uint8_t *)cursor + uvSizeofBatchHeader(n_entries, true);
 
 	/* Batch data */
 	crc2 = 0;
@@ -770,6 +771,13 @@ int uvSegmentBufferAppend(struct uvSegmentBuffer *b,
 		memcpy(cursor, entry->buf.base, entry->buf.len);
 		crc2 = byteCrc32(cursor, entry->buf.len, crc2);
 		cursor = (uint8_t *)cursor + entry->buf.len;
+		assert(entry->local_buf.len % sizeof(uint64_t) == 0);
+		if (entry->local_buf.len > 0) {
+			assert(entry->local_buf.base != NULL);
+			memcpy(cursor, entry->local_buf.base, entry->local_buf.len);
+			crc2 = byteCrc32(cursor, entry->local_buf.len, crc2);
+			cursor = (uint8_t *)cursor + entry->local_buf.len;
+		}
 	}
 
 	bytePut32(&crc1_p, crc1);
@@ -1010,7 +1018,7 @@ static int uvWriteClosedSegment(struct uv *uv,
 	 * block */
 	cap = uv->block_size -
 	      (sizeof(uint64_t) /* Format version */ +
-	       sizeof(uint64_t) /* Checksums */ + uvSizeofBatchHeader(1));
+	       sizeof(uint64_t) /* Checksums */ + uvSizeofBatchHeader(1, true /* include local bufs */));
 	if (conf->len > cap) {
 		return RAFT_TOOBIG;
 	}
