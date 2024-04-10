@@ -372,7 +372,8 @@ static void decodeRequestVoteResult(const uv_buf_t *buf,
 
 int uvDecodeBatchHeader(const void *batch,
 			struct raft_entry **entries,
-			unsigned *n)
+			unsigned *n,
+			bool include_local_bufs)
 {
 	const void *cursor = batch;
 	size_t i;
@@ -406,11 +407,12 @@ int uvDecodeBatchHeader(const void *batch,
 
 		cursor = (uint8_t *)cursor + 3; /* Unused */
 
-		entry->local_buf.base = NULL;
-		entry->local_buf.len = 0;
-
 		/* Size of the log entry data, little endian. */
 		entry->buf.len = byteGet32(&cursor);
+
+		if (include_local_bufs) {
+			entry->local_buf.len = byteGet64(&cursor);
+		}
 	}
 
 	return 0;
@@ -442,7 +444,7 @@ static int decodeAppendEntries(const uv_buf_t *buf,
 	args->prev_log_term = byteGet64(&cursor);
 	args->leader_commit = byteGet64(&cursor);
 
-	rv = uvDecodeBatchHeader(cursor, &args->entries, &args->n_entries);
+	rv = uvDecodeBatchHeader(cursor, &args->entries, &args->n_entries, false);
 	if (rv != 0) {
 		return rv;
 	}

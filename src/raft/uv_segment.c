@@ -288,7 +288,7 @@ static int uvLoadEntriesBatch(struct uv *uv,
 	}
 
 	/* Decode the batch header, allocating the entries array. */
-	rv = uvDecodeBatchHeader(header.base, entries, n_entries);
+	rv = uvDecodeBatchHeader(header.base, entries, n_entries, true);
 	if (rv != 0) {
 		goto err;
 	}

@@ -21,7 +21,8 @@ int uvDecodeMessage(uint16_t type,
 
 int uvDecodeBatchHeader(const void *batch,
 			struct raft_entry **entries,
-			unsigned *n);
+			unsigned *n,
+			bool include_local_bufs);
 
 void uvDecodeEntriesBatch(uint8_t *batch,
 			  size_t offset,
