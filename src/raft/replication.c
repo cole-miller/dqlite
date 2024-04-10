@@ -1235,7 +1235,7 @@ int replicationAppend(struct raft *r,
 			goto err_after_request_alloc;
 		}
 
-		rv = logAppend(r->log, copy.term, copy.type, &copy.buf, NULL);
+		rv = logAppend(r->log, copy.term, copy.type, copy.buf, copy.local_buf, copy.is_local, NULL);
 		if (rv != 0) {
 			goto err_after_request_alloc;
 		}

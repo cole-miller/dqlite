@@ -16,6 +16,8 @@
 #include "utils.h"
 #include "vfs.h"
 
+#define PLACEHOLDER_LOCAL_BUF ((struct raft_buffer){})
+
 /* Called when a leader exec request terminates and the associated callback can
  * be invoked. */
 static void leaderExecDone(struct exec *req)
@@ -224,7 +226,8 @@ static void leaderMaybeCheckpointLegacy(struct leader *l)
 		tracef("raft_malloc - no mem");
 		goto err_after_buf_alloc;
 	}
-	rv = raft_apply(l->raft, apply, &buf, 1, leaderCheckpointApplyCb);
+	struct raft_buffer local_buf = PLACEHOLDER_LOCAL_BUF;
+	rv = raft_apply(l->raft, apply, &buf, &local_buf, 1, leaderCheckpointApplyCb);
 	if (rv != 0) {
 		tracef("raft_apply failed %d", rv);
 		raft_free(apply);
@@ -332,7 +335,8 @@ static int leaderApplyFrames(struct exec *req,
 	apply->type = COMMAND_FRAMES;
 	idSet(apply->req.req_id, req->id);
 
-	rv = raft_apply(l->raft, &apply->req, &buf, 1, leaderApplyFramesCb);
+	struct raft_buffer local_buf = PLACEHOLDER_LOCAL_BUF;
+	rv = raft_apply(l->raft, &apply->req, &buf, &local_buf, 1, leaderApplyFramesCb);
 	if (rv != 0) {
 		tracef("raft apply failed %d", rv);
 		goto err_after_command_encode;
