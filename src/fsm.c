@@ -185,7 +185,7 @@ err_after_db_lock:
 	assert(rv == 0);
 }
 
-static int apply_frames(struct fsm *f, const struct command_frames *c)
+static int apply_frames(struct fsm *f, const struct command_frames *c, struct vfs2_wal_slice sl)
 {
 	tracef("fsm apply frames");
 	struct db *db;
@@ -312,13 +312,16 @@ static int apply_checkpoint(struct fsm *f, const struct command_checkpoint *c)
 
 static int fsm__apply(struct raft_fsm *fsm,
 		      const struct raft_buffer *buf,
+		      const struct raft_buffer *local_buf,
 		      void **result)
 {
 	tracef("fsm apply");
 	struct fsm *f = fsm->data;
 	int type;
 	void *command;
+	struct vfs2_wal_slice sl;
 	int rc;
+
 	rc = command__decode(buf, &type, &command);
 	if (rc != 0) {
 		tracef("fsm: decode command: %d", rc);
@@ -330,7 +333,9 @@ static int fsm__apply(struct raft_fsm *fsm,
 			rc = apply_open(f, command);
 			break;
 		case COMMAND_FRAMES:
-			rc = apply_frames(f, command);
+			assert(local_buf->len == sizeof(sl));
+			sl = *(struct vfs2_wal_slice *)(local_buf->base);
+			rc = apply_frames(f, command, sl);
 			break;
 		case COMMAND_UNDO:
 			rc = apply_undo(f, command);

@@ -593,6 +593,7 @@ struct raft_fsm
 	void *data;
 	int (*apply)(struct raft_fsm *fsm,
 		     const struct raft_buffer *buf,
+		     const struct raft_buffer *local_buf,
 		     void **result);
 	int (*snapshot)(struct raft_fsm *fsm,
 			struct raft_buffer *bufs[],

@@ -1507,12 +1507,13 @@ err:
 /* Apply a RAFT_COMMAND entry that has been committed. */
 static int applyCommand(struct raft *r,
 			const raft_index index,
-			const struct raft_buffer *buf)
+			const struct raft_buffer *buf,
+			const struct raft_buffer *local_buf)
 {
 	struct raft_apply *req;
 	void *result;
 	int rv;
-	rv = r->fsm->apply(r->fsm, buf, &result);
+	rv = r->fsm->apply(r->fsm, buf, local_buf, &result);
 	if (rv != 0) {
 		return rv;
 	}
@@ -1781,6 +1782,7 @@ int replicationApply(struct raft *r)
 		return 0;
 	}
 
+	raft_index last_command_index = 0;
 	for (index = r->last_applied + 1; index <= r->commit_index; index++) {
 		const struct raft_entry *entry = logGet(r->log, index);
 		if (entry == NULL) {
@@ -1795,7 +1797,7 @@ int replicationApply(struct raft *r)
 
 		switch (entry->type) {
 			case RAFT_COMMAND:
-				rv = applyCommand(r, index, &entry->buf);
+				last_command_index = index;
 				break;
 			case RAFT_BARRIER:
 				applyBarrier(r, index);
@@ -1814,6 +1816,12 @@ int replicationApply(struct raft *r)
 		if (rv != 0) {
 			break;
 		}
+	}
+
+	if (last_command_index > 0) {
+		const struct raft_entry *entry = logGet(r->log, last_command_index);
+
+				rv = applyCommand(r, index, &entry->buf, &entry->local_buf);
 	}
 
 	if (shouldTakeSnapshot(r)) {
