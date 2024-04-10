@@ -563,10 +563,11 @@ int uvDecodeMessage(uint16_t type,
 	return rv;
 }
 
-void uvDecodeEntriesBatch(uint8_t *batch,
-			  size_t offset,
-			  struct raft_entry *entries,
-			  unsigned n)
+int uvDecodeEntriesBatch(uint8_t *batch,
+			 size_t offset,
+			 struct raft_entry *entries,
+			 unsigned n,
+			 bool include_local_bufs)
 {
 	uint8_t *cursor;
 	size_t i;
@@ -591,5 +592,16 @@ void uvDecodeEntriesBatch(uint8_t *batch,
 			/* Add padding */
 			cursor = cursor + 8 - (entry->buf.len % 8);
 		}
+
+		assert(entry->local_buf.len % 8 == 0);
+		if (include_local_bufs) {
+			entry->local_buf.base = raft_malloc(entry->local_buf.len);
+			if (entry->local_buf.base == NULL) {
+				return RAFT_NOMEM;
+			}
+			memcpy(entry->local_buf.base, cursor, entry->local_buf.len);
+			cursor += entry->local_buf.len;
+		}
 	}
+	return 0;
 }

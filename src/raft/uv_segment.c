@@ -317,8 +317,11 @@ static int uvLoadEntriesBatch(struct uv *uv,
 		goto err_after_header_decode;
 	}
 
-	uvDecodeEntriesBatch(content->base, *offset - data.len, *entries,
-			     *n_entries);
+	rv = uvDecodeEntriesBatch(content->base, *offset - data.len, *entries,
+			     *n_entries, true);
+	if (rv != 0) {
+		goto err_after_header_decode;
+	}
 
 	*last = *offset == content->len;
 

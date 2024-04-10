@@ -24,10 +24,11 @@ int uvDecodeBatchHeader(const void *batch,
 			unsigned *n,
 			bool include_local_bufs);
 
-void uvDecodeEntriesBatch(uint8_t *batch,
-			  size_t offset,
-			  struct raft_entry *entries,
-			  unsigned n);
+int uvDecodeEntriesBatch(uint8_t *batch,
+			 size_t offset,
+			 struct raft_entry *entries,
+			 unsigned n,
+			 bool include_local_bufs);
 
 /**
  * TODO update docstring for local bufs
