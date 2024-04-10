@@ -14,6 +14,7 @@ void entryBatchesDestroy(struct raft_entry *entries, const size_t n)
 	}
 	assert(n > 0);
 	for (i = 0; i < n; i++) {
+		raft_free(entries[i].local_buf.base);
 		assert(entries[i].batch != NULL);
 		if (entries[i].batch != batch) {
 			batch = entries[i].batch;
@@ -27,6 +28,12 @@ int entryCopy(const struct raft_entry *src, struct raft_entry *dst)
 {
 	dst->term = src->term;
 	dst->type = src->type;
+	dst->local_buf.len = src->local_buf.len;
+	dst->local_buf.base = raft_malloc(dst->local_buf.len);
+	if (dst->local_buf.len > 0 && dst->local_buf.base == NULL) {
+		return RAFT_NOMEM;
+	}
+	memcpy(dst->local_buf.base, src->local_buf.base, dst->local_buf.len);
 	dst->buf.len = src->buf.len;
 	dst->buf.base = raft_malloc(dst->buf.len);
 	if (dst->buf.len > 0 && dst->buf.base == NULL) {
@@ -74,6 +81,12 @@ int entryBatchCopy(const struct raft_entry *src,
 	for (i = 0; i < n; i++) {
 		(*dst)[i].term = src[i].term;
 		(*dst)[i].type = src[i].type;
+		(*dst)[i].local_buf.len = src[i].local_buf.len;
+		(*dst)[i].local_buf.base = raft_malloc((*dst)[i].local_buf.len);
+		if ((*dst)[i].local_buf.base == NULL) {
+			return RAFT_NOMEM;
+		}
+		memcpy((*dst)[i].local_buf.base, src[i].local_buf.base, src[i].local_buf.len);
 		(*dst)[i].buf.base = cursor;
 		(*dst)[i].buf.len = src[i].buf.len;
 		(*dst)[i].batch = batch;

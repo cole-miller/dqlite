@@ -397,6 +397,9 @@ int uvDecodeBatchHeader(const void *batch,
 
 		cursor = (uint8_t *)cursor + 3; /* Unused */
 
+		entry->local_buf.base = NULL;
+		entry->local_buf.len = 0;
+
 		/* Size of the log entry data, little endian. */
 		entry->buf.len = byteGet32(&cursor);
 	}
