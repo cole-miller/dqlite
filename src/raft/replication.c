@@ -1121,7 +1121,7 @@ static int deleteConflictingEntries(struct raft *r,
 }
 
 int replicationAppend(struct raft *r,
-		      const struct raft_append_entries *args,
+		      struct raft_append_entries *args,
 		      raft_index *rejected,
 		      bool *async)
 {
