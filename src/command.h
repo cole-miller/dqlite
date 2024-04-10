@@ -9,6 +9,7 @@
 
 #include "lib/serialize.h"
 #include "raft.h"
+#include "vfs2.h"
 
 /* Command type codes */
 enum { COMMAND_OPEN = 1, COMMAND_FRAMES, COMMAND_UNDO, COMMAND_CHECKPOINT };
@@ -72,5 +73,7 @@ int command_frames_page_commits(const struct command_frames *c, uint64_t *page_c
 DQLITE_VISIBLE_TO_TESTS void command_frames__pages(
     const struct command_frames *c,
     void **pages);
+
+void command_frames_fill_vfs2(const struct command_frames *c, uint32_t page_size, struct vfs2_wal_frame *out);
 
 #endif /* COMMAND_H_*/

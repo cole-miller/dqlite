@@ -7,6 +7,7 @@
 #include "raft.h"
 #include "tracing.h"
 #include "vfs.h"
+#include "vfs2.h"
 
 #include <sys/mman.h>
 
@@ -712,6 +713,157 @@ static int fsm__restore(struct raft_fsm *fsm, struct raft_buffer *buf)
 	return 0;
 }
 
+struct apply_uncommitted {
+	pool_work_t work;
+	struct raft_fsm_post_receive *raft_req;
+	unsigned entry_index;
+	unsigned entries_len;
+	sqlite3 *conn;
+	uint32_t cookie;
+	uint32_t page_size;
+	struct vfs2_wal_frame *frames;
+	uint32_t frames_len;
+	struct vfs2_wal_slice sl;
+	struct raft_entry *entry;
+	unsigned *count;
+	raft_fsm_post_receive_cb cb;
+};
+
+static void apply_uncommitted_work_cb(pool_work_t *w)
+{
+	struct apply_uncommitted *req = CONTAINER_OF(w, struct apply_uncommitted, work);
+
+	sqlite3_file *fp;
+	sqlite3_file_control(req->conn, "main", SQLITE_FCNTL_FILE_POINTER, &fp);
+	struct vfs2_wal_slice sl;
+	int rv = vfs2_apply_uncommitted(fp, req->page_size, req->frames, req->frames_len, &sl);
+	if (rv != 0) {
+		req->work.rc = RAFT_IOERR;
+		return;
+	}
+
+	struct vfs2_wal_slice *slp = raft_malloc(sizeof(sl));;
+	if (slp == NULL) {
+		req->work.rc = RAFT_NOMEM;
+		return;
+	}
+	*slp = sl;
+	req->entry->local_buf.base = slp;
+	req->entry->local_buf.len = sizeof(*slp);
+	req->work.rc = 0;
+}
+
+static void unapply_all(struct apply_uncommitted *apply_reqs, unsigned n)
+{
+	/* TODO */
+	(void)apply_reqs;
+	(void)n;
+}
+
+static void apply_uncommitted_after_work_cb(pool_work_t *w)
+{
+	struct apply_uncommitted *req = CONTAINER_OF(w, struct apply_uncommitted, work);
+
+	sqlite3_free(req->frames);
+
+	assert(*req->count > 0);
+	*req->count -= 1;
+	if (*req->count == 0) {
+		sqlite3_free(req->count);
+
+		struct raft_fsm_post_receive *raft_req = req->raft_req;
+		unsigned entry_index = req->entry_index;
+		unsigned entries_len = req->entries_len;
+		raft_fsm_post_receive_cb cb = req->cb;
+		struct apply_uncommitted *all_apply_reqs = req - entry_index;
+
+		bool rollback = false;
+		for (unsigned j = 0; j < entries_len; j++) {
+			rollback |= (all_apply_reqs[j].work.rc != 0);
+		}
+		if (rollback) {
+			unapply_all(all_apply_reqs, entries_len);
+			return;
+		}
+
+		sqlite3_free(all_apply_reqs);
+		cb(raft_req, 0);
+	}
+}
+
+static int fsm_post_receive(struct raft_fsm *fsm, struct raft_fsm_post_receive *req, raft_fsm_post_receive_cb cb)
+{
+	struct fsm *f = fsm->data;
+	int rv;
+
+	struct apply_uncommitted *apply_reqs = sqlite3_malloc64(req->entries_len * sizeof(*apply_reqs));
+	if (apply_reqs == NULL) {
+		return RAFT_NOMEM;
+	}
+	unsigned *count = sqlite3_malloc(sizeof(*count));
+	if (count == NULL) {
+		return RAFT_NOMEM;
+	}
+	*count = 0;
+
+	for (unsigned i = 0; i < req->entries_len; i++) {
+		int type;
+		void *cmd;
+		rv = command__decode(&req->entries[i].buf, &type, &cmd);
+		if (rv != 0) {
+			return rv;
+		}
+		if (type != COMMAND_FRAMES) {
+			apply_reqs[i] = (struct apply_uncommitted){};
+			continue;
+		}
+
+		struct command_frames *cf = cmd;
+		struct db *db;
+		rv = registry__db_get(f->registry, cf->filename, &db);
+		if (rv != 0) {
+			return RAFT_NOMEM;
+		}
+		/* XXX 1<<16 issue */
+		uint32_t page_size = cf->frames.page_size;
+
+		uint32_t frames_len = cf->frames.n_pages;
+		struct vfs2_wal_frame *frames = sqlite3_malloc64(frames_len * sizeof(*frames));
+		if (frames == NULL) {
+			return RAFT_NOMEM;
+		}
+		command_frames_fill_vfs2(cf, page_size, frames);
+
+		/* XXX */
+		assert(db->follower != NULL);
+
+		apply_reqs[i].raft_req = req;
+		apply_reqs[i].entry_index = i;
+		apply_reqs[i].entries_len = req->entries_len;
+		apply_reqs[i].conn = db->follower;
+		apply_reqs[i].cookie = db->cookie;
+		apply_reqs[i].page_size = page_size;
+		apply_reqs[i].frames = frames;
+		apply_reqs[i].frames_len = frames_len;
+		apply_reqs[i].entry = &req->entries[i];
+		apply_reqs[i].count = count;
+		apply_reqs[i].cb = cb;
+
+		*count += 1;
+	}
+
+	for (unsigned i = 0; i < req->entries_len; i++) {
+		if (apply_reqs[i].conn == NULL) {
+			continue;
+		}
+		pool_queue_work(f->pool, &apply_reqs[i].work, apply_reqs[i].cookie,
+				WT_UNORD, apply_uncommitted_work_cb,
+				apply_uncommitted_after_work_cb);
+	}
+
+	return 0;
+}
+
 int fsm__init(struct raft_fsm *fsm,
 	      struct config *config,
 	      struct registry *registry,
@@ -731,12 +883,14 @@ int fsm__init(struct raft_fsm *fsm,
 	f->pending.pages = NULL;
 	f->pool = pool;
 
-	fsm->version = 2;
+	fsm->version = 3;
 	fsm->data = f;
 	fsm->apply = fsm__apply;
 	fsm->snapshot = fsm__snapshot;
 	fsm->snapshot_finalize = fsm__snapshot_finalize;
 	fsm->restore = fsm__restore;
+	fsm->snapshot_async = NULL;
+	fsm->post_receive = fsm_post_receive;
 
 	return 0;
 }

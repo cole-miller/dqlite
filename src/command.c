@@ -199,3 +199,24 @@ void command_frames__pages(const struct command_frames *c, void **pages)
 	*pages =
 	    (void *)(c->frames.data + (2 * sizeof(uint64_t) * c->frames.n_pages));
 }
+
+void command_frames_fill_vfs2(const struct command_frames *c, uint32_t page_size, struct vfs2_wal_frame *out)
+{
+	int rv;
+	uint32_t frames_len = c->frames.n_pages;
+	const char *data = c->frames.data;
+	size_t hunk = frames_len * sizeof(uint64_t);
+	struct cursor page_numbers = {.p = data, .cap = hunk};
+	struct cursor commits = {.p = data + hunk, .cap = hunk};
+	const char *page_data = data + 2 * hunk;
+	for (uint32_t i = 0; i < frames_len; i++) {
+		uint64_t temp;
+		rv = uint64__decode(&page_numbers, &temp);
+		assert(rv == 0);
+		out[i].page_number = (uint32_t)temp;
+		rv = uint64__decode(&commits, &temp);
+		assert(rv == 0);
+		out[i].commit = (uint32_t)temp;
+		out[i].page = (void *)(page_data + i * page_size);
+	}
+}
