@@ -1504,26 +1504,59 @@ err:
 	return rv;
 }
 
-/* Apply a RAFT_COMMAND entry that has been committed. */
-static int applyCommand(struct raft *r,
-			const raft_index index,
-			const struct raft_buffer *buf,
-			const struct raft_buffer *local_buf)
+struct apply_async {
+	struct raft_fsm_apply_async base;
+	struct raft *raft;
+	raft_index index;
+	struct raft_entry *entries;
+	unsigned entries_len;
+};
+
+static void apply_command_async_cb(struct raft_fsm_apply_async *base_req, void *result, int status)
 {
-	struct raft_apply *req;
-	void *result;
+	struct apply_async *async_req = (struct apply_async *)base_req;
+	struct raft *r = async_req->raft;
+
+	if (status == 0) {
+		r->last_applied = async_req->index;
+	}
+
+	logRelease(r->log, async_req->index, async_req->entries, async_req->entries_len);
+
+	struct raft_apply *req = (struct raft_apply *)getRequest(r, async_req->index, RAFT_COMMAND);
+	if (req != NULL && req->cb != NULL) {
+		req->cb(req, status, result);
+	}
+}
+
+/* Apply a RAFT_COMMAND entry that has been committed. */
+static int apply_command_async(struct raft *r,
+			       const raft_index index,
+			       struct raft_buffer buf,
+			       struct raft_buffer local_buf,
+			       bool is_local,
+			       struct raft_entry *entries,
+			       unsigned entries_len)
+{
 	int rv;
-	rv = r->fsm->apply(r->fsm, buf, local_buf, &result);
+
+	struct apply_async *async_req = raft_malloc(sizeof(*async_req));
+	if (async_req == NULL) {
+		return RAFT_NOMEM;
+	}
+	async_req->base.buf = buf;
+	async_req->base.local_buf = local_buf;
+	async_req->base.is_local = is_local;
+	async_req->raft = r;
+	async_req->index = index;
+	async_req->entries = entries;
+	async_req->entries_len = entries_len;
+
+	rv = r->fsm->apply_async(r->fsm, (struct raft_fsm_apply_async *)async_req, apply_command_async_cb);
 	if (rv != 0) {
 		return rv;
 	}
 
-	r->last_applied = index;
-
-	req = (struct raft_apply *)getRequest(r, index, RAFT_COMMAND);
-	if (req != NULL && req->cb != NULL) {
-		req->cb(req, 0, result);
-	}
 	return 0;
 }
 
@@ -1819,9 +1852,20 @@ int replicationApply(struct raft *r)
 	}
 
 	if (last_command_index > 0) {
-		const struct raft_entry *entry = logGet(r->log, last_command_index);
-
-				rv = applyCommand(r, index, &entry->buf, &entry->local_buf);
+		struct raft_entry *entries;
+		unsigned n;
+		/* XXX we only want to acquire the entry at this index, not all the following ones--
+		 * teach the log to support that operation */
+		rv = logAcquire(r->log, index, &entries, &n);
+		if (rv != 0) {
+			return rv;
+		}
+		rv = apply_command_async(r, index,
+				entries[0].buf, entries[0].local_buf, entries[0].is_local,
+				entries, n);
+		if (rv != 0) {
+			return rv;
+		}
 	}
 
 	if (shouldTakeSnapshot(r)) {

@@ -312,6 +312,17 @@ static int apply_checkpoint(struct fsm *f, const struct command_checkpoint *c)
 	return 0;
 }
 
+static int fsm_apply_async(struct raft_fsm *fsm,
+			   struct raft_fsm_apply_async *req,
+			   raft_fsm_apply_cb cb)
+{
+	/* TODO */
+	(void)fsm;
+	(void)req;
+	(void)cb;
+	return 0;
+}
+
 static int fsm__apply(struct raft_fsm *fsm,
 		      const struct raft_buffer *buf,
 		      const struct raft_buffer *local_buf,
@@ -892,7 +903,8 @@ int fsm__init(struct raft_fsm *fsm,
 
 	fsm->version = 3;
 	fsm->data = f;
-	fsm->apply = fsm__apply;
+	(void)fsm__apply;
+	fsm->apply_async = fsm_apply_async;
 	fsm->snapshot = fsm__snapshot;
 	fsm->snapshot_finalize = fsm__snapshot_finalize;
 	fsm->restore = fsm__restore;

@@ -581,6 +581,15 @@ struct raft_io
  * routines themselves.
  */
 
+struct raft_fsm_apply_async {
+   struct raft_buffer buf;
+   struct raft_buffer local_buf;
+   bool is_local;
+};
+
+/* XXX */
+typedef void (*raft_fsm_apply_cb)(struct raft_fsm_apply_async *req, void *result, int status);
+
 struct raft_fsm_post_receive {
 	struct raft_entry *entries;
 	unsigned entries_len;
@@ -592,10 +601,9 @@ struct raft_fsm
 {
 	int version; /* Always set this to 3 */
 	void *data;
-	int (*apply)(struct raft_fsm *fsm,
-		     const struct raft_buffer *buf,
-		     const struct raft_buffer *local_buf,
-		     void **result);
+	int (*apply_async)(struct raft_fsm *fsm,
+			   struct raft_fsm_apply_async *req,
+			   raft_fsm_apply_cb cb);
 	int (*snapshot)(struct raft_fsm *fsm,
 			struct raft_buffer *bufs[],
 			unsigned *n_bufs);
