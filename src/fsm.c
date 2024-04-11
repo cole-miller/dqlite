@@ -319,6 +319,8 @@ static void apply_frames_async(struct fsm *f,
 			       raft_fsm_apply_cb cb)
 {
 	/* TODO */
+	(void)apply_frames;
+
 	(void)f;
 	(void)cmd;
 	(void)sl;
@@ -367,49 +369,6 @@ resolve:
 	cb(req, NULL, rv);
 }
 
-static int fsm__apply(struct raft_fsm *fsm,
-		      const struct raft_buffer *buf,
-		      const struct raft_buffer *local_buf,
-		      void **result)
-{
-	tracef("fsm apply");
-	struct fsm *f = fsm->data;
-	int type;
-	void *command;
-	struct vfs2_wal_slice sl;
-	int rc;
-
-	rc = command__decode(buf, &type, &command);
-	if (rc != 0) {
-		tracef("fsm: decode command: %d", rc);
-		goto err;
-	}
-
-	switch (type) {
-		case COMMAND_OPEN:
-			rc = apply_open(f, command);
-			break;
-		case COMMAND_FRAMES:
-			assert(local_buf->len == sizeof(sl));
-			sl = *(struct vfs2_wal_slice *)(local_buf->base);
-			rc = apply_frames(f, command, sl);
-			break;
-		case COMMAND_UNDO:
-			rc = apply_undo(f, command);
-			break;
-		case COMMAND_CHECKPOINT:
-			rc = apply_checkpoint(f, command);
-			break;
-		default:
-			rc = RAFT_MALFORMED;
-			break;
-	}
-
-	raft_free(command);
-err:
-	*result = NULL;
-	return rc;
-}
 
 #define SNAPSHOT_FORMAT 1
 
@@ -947,7 +906,6 @@ int fsm__init(struct raft_fsm *fsm,
 
 	fsm->version = 3;
 	fsm->data = f;
-	(void)fsm__apply;
 	fsm->apply_async = fsm_apply_async;
 	fsm->snapshot = fsm__snapshot;
 	fsm->snapshot_finalize = fsm__snapshot_finalize;
