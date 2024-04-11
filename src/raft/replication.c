@@ -1538,8 +1538,6 @@ static int apply_command_async(struct raft *r,
 			       struct raft_entry *entries,
 			       unsigned entries_len)
 {
-	int rv;
-
 	struct apply_async *async_req = raft_malloc(sizeof(*async_req));
 	if (async_req == NULL) {
 		return RAFT_NOMEM;
@@ -1552,10 +1550,7 @@ static int apply_command_async(struct raft *r,
 	async_req->entries = entries;
 	async_req->entries_len = entries_len;
 
-	rv = r->fsm->apply_async(r->fsm, (struct raft_fsm_apply_async *)async_req, apply_command_async_cb);
-	if (rv != 0) {
-		return rv;
-	}
+	r->fsm->apply_async(r->fsm, (struct raft_fsm_apply_async *)async_req, apply_command_async_cb);
 
 	return 0;
 }

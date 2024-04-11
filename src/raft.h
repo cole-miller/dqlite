@@ -601,9 +601,9 @@ struct raft_fsm
 {
 	int version; /* Always set this to 3 */
 	void *data;
-	int (*apply_async)(struct raft_fsm *fsm,
-			   struct raft_fsm_apply_async *req,
-			   raft_fsm_apply_cb cb);
+	void (*apply_async)(struct raft_fsm *fsm,
+			    struct raft_fsm_apply_async *req,
+			    raft_fsm_apply_cb cb);
 	int (*snapshot)(struct raft_fsm *fsm,
 			struct raft_buffer *bufs[],
 			unsigned *n_bufs);

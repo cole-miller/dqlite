@@ -312,15 +312,59 @@ static int apply_checkpoint(struct fsm *f, const struct command_checkpoint *c)
 	return 0;
 }
 
-static int fsm_apply_async(struct raft_fsm *fsm,
-			   struct raft_fsm_apply_async *req,
-			   raft_fsm_apply_cb cb)
+static void apply_frames_async(struct fsm *f,
+			       struct command_frames *cmd,
+			       struct vfs2_wal_slice sl,
+			       struct raft_fsm_apply_async *req,
+			       raft_fsm_apply_cb cb)
 {
 	/* TODO */
-	(void)fsm;
+	(void)f;
+	(void)cmd;
+	(void)sl;
 	(void)req;
 	(void)cb;
-	return 0;
+}
+
+static void fsm_apply_async(struct raft_fsm *fsm,
+			    struct raft_fsm_apply_async *req,
+			    raft_fsm_apply_cb cb)
+{
+	struct fsm *f = fsm->data;
+	int rv;
+
+	int type;
+	void *command;
+	rv = command__decode(&req->buf, &type, &command);
+	if (rv != 0) {
+		tracef("fsm: decode command: %d", rv);
+		goto resolve;
+	}
+
+	struct vfs2_wal_slice sl;
+	switch (type) {
+		case COMMAND_OPEN:
+			rv = apply_open(f, command);
+			break;
+		case COMMAND_FRAMES:
+			assert(req->local_buf.len == sizeof(sl));
+			sl = *(struct vfs2_wal_slice *)(req->local_buf.base);
+			apply_frames_async(f, command, sl, req, cb);
+			return;
+		case COMMAND_UNDO:
+			rv = apply_undo(f, command);
+			break;
+		case COMMAND_CHECKPOINT:
+			rv = apply_checkpoint(f, command);
+			break;
+		default:
+			rv = RAFT_MALFORMED;
+			break;
+	}
+	raft_free(command);
+
+resolve:
+	cb(req, NULL, rv);
 }
 
 static int fsm__apply(struct raft_fsm *fsm,
