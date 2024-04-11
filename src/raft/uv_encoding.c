@@ -602,6 +602,8 @@ int uvDecodeEntriesBatch(uint8_t *batch,
 			memcpy(entry->local_buf.base, cursor, entry->local_buf.len);
 			cursor += entry->local_buf.len;
 		}
+
+		entry->is_local = false;
 	}
 	return 0;
 }

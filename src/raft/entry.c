@@ -4,6 +4,8 @@
 #include "assert.h"
 #include "entry.h"
 
+/* TODO fix these for the new entry members */
+
 void entryBatchesDestroy(struct raft_entry *entries, const size_t n)
 {
 	void *batch = NULL;

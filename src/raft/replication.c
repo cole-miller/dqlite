@@ -1193,7 +1193,7 @@ static void post_receive_cb(struct raft_fsm_post_receive *base, int status)
 			goto err_after_request_alloc;
 		}
 
-		rv = logAppend(r->log, copy.term, copy.type, &copy.buf, NULL);
+		rv = logAppend(r->log, copy.term, copy.type, copy.buf, (struct raft_buffer){}, false, NULL);
 		if (rv != 0) {
 			goto err_after_request_alloc;
 		}

@@ -113,13 +113,16 @@ int logReinstate(struct raft_log *l,
 int logAppend(struct raft_log *l,
 	      raft_term term,
 	      unsigned short type,
-	      const struct raft_buffer *buf,
+	      struct raft_buffer buf,
+	      struct raft_buffer local_buf,
+	      bool is_local,
 	      void *batch);
 
 /* Convenience to append a series of #RAFT_COMMAND entries. */
 int logAppendCommands(struct raft_log *l,
 		      const raft_term term,
 		      const struct raft_buffer bufs[],
+		      const struct raft_buffer local_bufs[],
 		      const unsigned n);
 
 /* Convenience to encode and append a single #RAFT_CHANGE entry. */

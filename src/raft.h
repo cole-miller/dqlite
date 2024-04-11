@@ -220,6 +220,7 @@ struct raft_entry
 	unsigned short type; /* Type (FSM command, barrier, config change). */
 	struct raft_buffer buf; /* Entry data. */
 	struct raft_buffer local_buf; /* Populated locally, persisted, not sent. */
+	bool is_local; /* Not persisted; true if we originated this entry. */
 	void *batch;            /* Batch that buf's memory points to, if any. */
 };
 
@@ -1078,6 +1079,7 @@ struct raft_apply
 RAFT_API int raft_apply(struct raft *r,
 			struct raft_apply *req,
 			const struct raft_buffer bufs[],
+			const struct raft_buffer local_bufs[],
 			const unsigned n,
 			raft_apply_cb cb);
 

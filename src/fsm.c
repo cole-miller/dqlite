@@ -188,6 +188,8 @@ err_after_db_lock:
 static int apply_frames(struct fsm *f, const struct command_frames *c, struct vfs2_wal_slice sl)
 {
 	tracef("fsm apply frames");
+	/* XXX */
+	(void)sl;
 	struct db *db;
 	sqlite3_vfs *vfs;
 	unsigned long *page_numbers = NULL;
