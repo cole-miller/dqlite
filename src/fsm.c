@@ -312,20 +312,17 @@ static int apply_checkpoint(struct fsm *f, const struct command_checkpoint *c)
 	return 0;
 }
 
+struct commit_frames {
+	pool_work_t work;
+};
+
 static void apply_frames_async(struct fsm *f,
 			       struct command_frames *cmd,
 			       struct vfs2_wal_slice sl,
-			       struct raft_fsm_apply_async *req,
+			       struct raft_fsm_apply_async *raft_req,
 			       raft_fsm_apply_cb cb)
 {
-	/* TODO */
-	(void)apply_frames;
-
-	(void)f;
-	(void)cmd;
-	(void)sl;
-	(void)req;
-	(void)cb;
+	pool_queue_work(f->pool);
 }
 
 static void fsm_apply_async(struct raft_fsm *fsm,
