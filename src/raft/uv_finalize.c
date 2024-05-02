@@ -34,6 +34,14 @@ static void uvFinalizeWorkCb(uv_work_t *work)
 	sprintf(filename2, UV__CLOSED_TEMPLATE, segment->first_index,
 		segment->last_index);
 
+	ruv_record_event(uv, (struct ruv_segment_event){
+		.type = RUV_EV_FINALIZE,
+		.finalize = {
+			.counter = segment->counter,
+			.first_index = segment->first_index,
+			.end_index = segment->last_index,
+		}
+	});
 	tracef("finalize %s into %s", filename1, filename2);
 
 	/* If the segment hasn't actually been used (because the writer has been
