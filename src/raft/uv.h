@@ -3,6 +3,8 @@
 #ifndef UV_H_
 #define UV_H_
 
+#include <stdatomic.h>
+
 #include "../raft.h"
 #include "../tracing.h"
 #include "err.h"
@@ -127,7 +129,7 @@ struct uv
 	raft_io_close_cb close_cb; /* Invoked when finishing closing */
 	bool auto_recovery;        /* Try to recover from corrupt segments */
 	volatile struct ruv_segment_event *evs;
-	size_t evs_next;
+	atomic_uint evs_next;
 	int evs_fd;
 };
 
