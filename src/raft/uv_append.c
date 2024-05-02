@@ -648,7 +648,17 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 
 	append->segment = segment;
 	queue_insert_tail(&uv->append_pending_reqs, &append->queue);
+
+	uint64_t old_index = uv->append_next_index;
 	uv->append_next_index += append->n;
+	ruv_record_event(uv, (struct ruv_segment_event){
+		.type = RUV_EV_APPEND,
+		.append = {
+			.target_counter = segment->counter,
+			.first_index = old_index,
+			.end_index = uv->append_next_index
+		}
+	});
 	tracef("set uv->append_next_index %llu", uv->append_next_index);
 
 	return 0;
