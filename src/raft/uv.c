@@ -80,6 +80,12 @@ static int uvMaintenance(const char *dir, char *errmsg)
 	return rv;
 }
 
+#define RUV_EVENTS_FILENAME "segment-events"
+
+static const struct ruv_segment_event zeroed_evs[RUV_NUM_EVS];
+
+#define RUV_EVENTS_SPACE sizeof(zeroed_evs)
+
 /* Implementation of raft_io->config. */
 static int uvInit(struct raft_io *io, raft_id id, const char *address)
 {
@@ -130,6 +136,35 @@ static int uvInit(struct raft_io *io, raft_id id, const char *address)
 	uv->evs_next = 0;
 	uv->evs_fd = -1;
 
+	char events_path[UV__PATH_SZ];
+	snprintf(events_path, sizeof(events_path), "%s/" RUV_EVENTS_FILENAME, uv->dir);
+	int fd = open(events_path, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+	if (fd < 0) {
+		goto done;
+	}
+
+	uv_stat_t sb;
+	rv = UvOsStat(events_path, &sb);
+	if (rv != 0) {
+		goto done;
+	}
+	if (sb.st_size < RUV_EVENTS_SPACE) {
+		ssize_t n = write(fd, zeroed_evs, RUV_EVENTS_SPACE);
+		if (n < (ssize_t)RUV_EVENTS_SPACE) {
+			goto done;
+		}
+	}
+
+	volatile void *p = mmap(NULL, RUV_EVENTS_SPACE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+	if (p == MAP_FAILED) {
+		close(fd);
+		goto done;
+	}
+
+	uv->evs = p;
+	uv->evs_fd = fd;
+
+done:
 	return 0;
 }
 
@@ -478,11 +513,23 @@ err:
 	return rv;
 }
 
-#define RUV_EVENTS_FILENAME "segment-events"
-
-static const struct ruv_segment_event zeroed_evs[RUV_NUM_EVS];
-
-#define RUV_EVENTS_SPACE sizeof(zeroed_evs)
+static void trace_events(struct uv *uv)
+{
+	for (size_t i = 0; i < RUV_NUM_EVS; i++) {
+		struct ruv_segment_event ev = uv->evs[i];
+		switch (ev.type) {
+			case RUV_EV_APPEND:
+				tracef("APPEND");
+				break;
+			case RUV_EV_REWIND:
+				tracef("REWIND");
+				break;
+			case RUV_EV_FINALIZE:
+				tracef("FINALIZE");
+				break;
+		}
+	}
+}
 
 /* Implementation of raft_io->load. */
 static int uvLoad(struct raft_io *io,
@@ -504,6 +551,7 @@ static int uvLoad(struct raft_io *io,
 	rv = uvLoadSnapshotAndEntries(uv, snapshot, start_index, entries,
 				      n_entries, 0);
 	if (rv != 0) {
+		trace_events(uv);
 		return rv;
 	}
 	tracef("start index %lld, %zu entries", *start_index, *n_entries);
@@ -514,34 +562,6 @@ static int uvLoad(struct raft_io *io,
 	/* Set the index of the next entry that will be appended. */
 	uv->append_next_index = *start_index + *n_entries;
 
-	/* Start recording events. */
-	char events_path[UV__PATH_SZ];
-	snprintf(events_path, sizeof(events_path), "%s/" RUV_EVENTS_FILENAME, uv->dir);
-	int fd = open(events_path, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
-	if (fd < 0) {
-		goto done;
-	}
-	uv->evs_fd = fd;
-
-	uv_stat_t sb;
-	rv = UvOsStat(events_path, &sb);
-	if (rv != 0) {
-		goto done;
-	}
-	if (sb.st_size < RUV_EVENTS_SPACE) {
-		ssize_t n = write(fd, zeroed_evs, RUV_EVENTS_SPACE);
-		if (n < (ssize_t)RUV_EVENTS_SPACE) {
-			goto done;
-		}
-	}
-
-	volatile void *p = mmap(NULL, RUV_EVENTS_SPACE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-	if (p == MAP_FAILED) {
-		goto done;
-	}
-	uv->evs = p;
-
-done:
 	return 0;
 }
 
