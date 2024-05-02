@@ -52,6 +52,36 @@ struct uvMetadata
 	raft_id voted_for;          /* Server ID of last vote, or 0 */
 };
 
+struct ruv_segment_event {
+	uint64_t ts;
+	uint64_t type;
+	union {
+		struct {
+			uint64_t target_counter;
+			uint64_t first_index;
+			uint64_t end_index;
+		} append;
+		struct {
+			uint64_t counter;
+			uint64_t first_index;
+			uint64_t end_index;
+		} finalize;
+		struct {
+			uint64_t old_index;
+			uint64_t new_index;
+		} rewind;
+	};
+};
+
+enum {
+	RUV_EV_UNUSED = 0,
+	RUV_EV_APPEND,
+	RUV_EV_REWIND,
+	RUV_EV_FINALIZE
+};
+
+#define RUV_NUM_EVS 100
+
 /* Hold state of a libuv-based raft_io implementation. */
 struct uv
 {
@@ -95,7 +125,12 @@ struct uv
 	bool closing;              /* True if we are closing */
 	raft_io_close_cb close_cb; /* Invoked when finishing closing */
 	bool auto_recovery;        /* Try to recover from corrupt segments */
+	volatile struct ruv_segment_event *evs;
+	size_t evs_next;
+	int evs_fd;
 };
+
+void ruv_record_event(struct uv *uv, struct ruv_segment_event ev);
 
 /* Implementation of raft_io->truncate. */
 int UvTruncate(struct raft_io *io, raft_index index);

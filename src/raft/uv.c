@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "../raft.h"
 #include "../tracing.h"
@@ -124,6 +125,10 @@ static int uvInit(struct raft_io *io, raft_id id, const char *address)
 	rv = uv_timer_init(uv->loop, &uv->timer);
 	assert(rv == 0); /* This should never fail */
 	uv->timer.data = uv;
+
+	uv->evs = NULL;
+	uv->evs_next = 0;
+	uv->evs_fd = -1;
 
 	return 0;
 }
@@ -473,6 +478,12 @@ err:
 	return rv;
 }
 
+#define RUV_EVENTS_FILENAME "segment-events"
+
+static const uint8_t zeroed_evs[RUV_NUM_EVS];
+
+#define RUV_EVENTS_SPACE sizeof(zeroed_evs)
+
 /* Implementation of raft_io->load. */
 static int uvLoad(struct raft_io *io,
 		  raft_term *term,
@@ -503,6 +514,34 @@ static int uvLoad(struct raft_io *io,
 	/* Set the index of the next entry that will be appended. */
 	uv->append_next_index = *start_index + *n_entries;
 
+	/* Start recording events. */
+	char events_path[UV__PATH_SZ];
+	snprintf(events_path, sizeof(events_path), "%s/" RUV_EVENTS_FILENAME, uv->dir);
+	int fd = open(events_path, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+	if (fd < 0) {
+		goto done;
+	}
+	uv->evs_fd = fd;
+
+	uv_stat_t sb;
+	rv = UvOsStat(events_path, &sb);
+	if (rv != 0) {
+		goto done;
+	}
+	if (sb.st_size < RUV_EVENTS_SPACE) {
+		ssize_t n = write(fd, zeroed_evs, RUV_EVENTS_SPACE);
+		if (n < (ssize_t)RUV_EVENTS_SPACE) {
+			goto done;
+		}
+	}
+
+	volatile void *p = mmap(NULL, RUV_EVENTS_SPACE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+	if (p == MAP_FAILED) {
+		goto done;
+	}
+	uv->evs = p;
+
+done:
 	return 0;
 }
 
@@ -758,8 +797,15 @@ err:
 
 void raft_uv_close(struct raft_io *io)
 {
-	struct uv *uv;
-	uv = io->impl;
+	struct uv *uv = io->impl;
+
+	if (uv->evs != NULL) {
+		munmap((void *)uv->evs, RUV_EVENTS_SPACE);
+	}
+	if (uv->evs_fd != -1) {
+		close(uv->evs_fd);
+	}
+
 	io->impl = NULL;
 	raft_free(uv);
 }
@@ -812,3 +858,11 @@ void raft_uv_set_auto_recovery(struct raft_io *io, bool flag)
 	uv->auto_recovery = flag;
 }
 
+void ruv_record_event(struct uv *uv, struct ruv_segment_event ev)
+{
+	if (uv->evs == NULL) {
+		return;
+	}
+	uv->evs[uv->evs_next] = ev;
+	uv->evs_next = (uv->evs_next + 1) % RUV_NUM_EVS;
+}
