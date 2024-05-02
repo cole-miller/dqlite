@@ -53,7 +53,8 @@ struct uvMetadata
 };
 
 struct ruv_segment_event {
-	uint64_t ts;
+	uint64_t secs;
+	uint64_t nsecs;
 	uint64_t type;
 	union {
 		struct {

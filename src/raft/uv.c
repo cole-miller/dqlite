@@ -863,6 +863,10 @@ void ruv_record_event(struct uv *uv, struct ruv_segment_event ev)
 	if (uv->evs == NULL) {
 		return;
 	}
+	uv_timespec64_t ts;
+	uv_clock_gettime(UV_CLOCK_MONOTONIC, &ts);
+	ev.secs = (uint64_t)ts.tv_sec;
+	ev.nsecs = (uint64_t)ts.tv_nsec;
 	uv->evs[uv->evs_next] = ev;
 	uv->evs_next = (uv->evs_next + 1) % RUV_NUM_EVS;
 }
