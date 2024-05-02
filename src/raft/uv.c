@@ -480,7 +480,7 @@ err:
 
 #define RUV_EVENTS_FILENAME "segment-events"
 
-static const uint8_t zeroed_evs[RUV_NUM_EVS];
+static const struct ruv_segment_event zeroed_evs[RUV_NUM_EVS];
 
 #define RUV_EVENTS_SPACE sizeof(zeroed_evs)
 
