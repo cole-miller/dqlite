@@ -39,7 +39,7 @@ static void uvFinalizeWorkCb(uv_work_t *work)
 		.finalize = {
 			.counter = segment->counter,
 			.first_index = segment->first_index,
-			.end_index = segment->last_index,
+			.end_index = segment->last_index
 		}
 	});
 	tracef("finalize %s into %s", filename1, filename2);

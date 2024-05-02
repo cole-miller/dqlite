@@ -112,9 +112,17 @@ static void uvAppendFinishRequestsInQueue(struct uv *uv, queue *q, int status)
 		if (status != 0) {
 			tracef("rollback uv->append_next_index was:%llu",
 			       uv->append_next_index);
+			raft_index old_index = uv->append_next_index;
 			uv->append_next_index -= append->n;
 			tracef("rollback uv->append_next_index now:%llu",
 			       uv->append_next_index);
+			ruv_record_event(uv, (struct ruv_segment_event){
+				.type = RUV_EV_REWIND,
+				.rewind = {
+					.old_index = old_index,
+					.new_index = uv->append_next_index
+				}
+			});
 		}
 		queue_remove(head);
 		queue_insert_tail(&queue_copy, head);
