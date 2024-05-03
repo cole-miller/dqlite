@@ -878,16 +878,20 @@ void raft_uv_set_auto_recovery(struct raft_io *io, bool flag)
 	uv->auto_recovery = flag;
 }
 
-static unsigned get_evs_next(struct uv *uv)
+static unsigned acquire_evs(struct uv *uv)
 {
 	unsigned x = 0;
-	while (!atomic_compare_exchange_weak_explicit(
-			&uv->evs_next,
-			&x,
-			(x + 1) % RUV_NUM_EVS,
-			memory_order_relaxed,
-			memory_order_relaxed)) {}
-	return x;
+	while (!atomic_compare_exchange_weak_explicit(&uv->evs_next, &x, x|1, memory_order_acquire, memory_order_relaxed)) {
+		if (x & 1) {
+			x++;
+		}
+	}
+	return x >> 1;
+}
+
+static void release_evs(struct uv *uv, unsigned i)
+{
+	atomic_store_explicit(&uv->evs_next, (i + 1) << 1, memory_order_release);
 }
 
 void ruv_record_event(struct uv *uv, struct ruv_segment_event ev)
@@ -899,6 +903,7 @@ void ruv_record_event(struct uv *uv, struct ruv_segment_event ev)
 	uv_clock_gettime(UV_CLOCK_MONOTONIC, &ts);
 	ev.secs = (uint64_t)ts.tv_sec;
 	ev.nsecs = (uint64_t)ts.tv_nsec;
-	unsigned i = get_evs_next(uv);
-	uv->evs[i] = ev;
+	unsigned i = acquire_evs(uv);
+	uv->evs[i % RUV_NUM_EVS] = ev;
+	release_evs(uv, i);
 }
