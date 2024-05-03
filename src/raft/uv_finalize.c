@@ -42,7 +42,11 @@ static void uvFinalizeWorkCb(uv_work_t *work)
 			.end_index = segment->last_index
 		}
 	});
-	tracef("finalize %s into %s", filename1, filename2);
+	tracef("RECORD FINALIZE ino=%lu counter=%llu first_index=%llu end_index=%llu",
+			ruv_open_segment_ino(uv, segment->counter),
+			segment->counter,
+			segment->first_index,
+			segment->last_index);
 
 	/* If the segment hasn't actually been used (because the writer has been
 	 * closed or aborted before making any write), just remove it. */

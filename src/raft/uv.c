@@ -163,6 +163,12 @@ static int uvInit(struct raft_io *io, raft_id id, const char *address)
 
 	uv->evs = p;
 	uv->evs_fd = fd;
+	for (unsigned i = 0; i < RUV_NUM_EVS; i++) {
+		if (uv->evs[i].type == RUV_EV_UNUSED) {
+			uv->evs_next = i << 1;
+			break;
+		}
+	}
 
 done:
 	return 0;
@@ -384,6 +390,31 @@ static int uvFilterSegments(struct uv *uv,
 	return 0;
 }
 
+static void trace_events(struct uv *uv)
+{
+	for (size_t i = 0; i < RUV_NUM_EVS; i++) {
+		struct ruv_segment_event ev = uv->evs[i];
+		char ts[100];
+		snprintf(ts, sizeof(ts), "%" PRIu64 ".%09" PRIu64, ev.secs, ev.nsecs);
+		switch (ev.type) {
+			case RUV_EV_APPEND:
+				tracef("APPEND ts=%s counter=%" PRIu64 " first=%" PRIu64 " end=%" PRIu64,
+						ts, ev.append.target_counter,
+						ev.append.first_index, ev.append.end_index);
+				break;
+			case RUV_EV_FINALIZE:
+				tracef("FINALIZE ts=%s counter=%" PRIu64 " first=%" PRIu64 " end=%" PRIu64,
+						ts, ev.finalize.counter,
+						ev.finalize.first_index, ev.finalize.end_index);
+				break;
+			case RUV_EV_REWIND:
+				tracef("REWIND ts=%s old=%" PRIu64 " new=%" PRIu64,
+						ts, ev.rewind.old_index, ev.rewind.new_index);
+				break;
+		}
+	}
+}
+
 /* Load the last snapshot (if any) and all entries contained in all segment
  * files of the data directory. This function can be called recursively, `depth`
  * is there to ensure we don't get stuck in a recursive loop. */
@@ -487,6 +518,7 @@ static int uvLoadSnapshotAndEntries(struct uv *uv,
 
 err:
 	assert(rv != 0);
+	trace_events(uv);
 	if (*snapshot != NULL) {
 		snapshotDestroy(*snapshot);
 		*snapshot = NULL;
@@ -513,24 +545,6 @@ err:
 	return rv;
 }
 
-static void trace_events(struct uv *uv)
-{
-	for (size_t i = 0; i < RUV_NUM_EVS; i++) {
-		struct ruv_segment_event ev = uv->evs[i];
-		switch (ev.type) {
-			case RUV_EV_APPEND:
-				tracef("APPEND");
-				break;
-			case RUV_EV_REWIND:
-				tracef("REWIND");
-				break;
-			case RUV_EV_FINALIZE:
-				tracef("FINALIZE");
-				break;
-		}
-	}
-}
-
 /* Implementation of raft_io->load. */
 static int uvLoad(struct raft_io *io,
 		  raft_term *term,
@@ -551,7 +565,6 @@ static int uvLoad(struct raft_io *io,
 	rv = uvLoadSnapshotAndEntries(uv, snapshot, start_index, entries,
 				      n_entries, 0);
 	if (rv != 0) {
-		trace_events(uv);
 		return rv;
 	}
 	tracef("start index %lld, %zu entries", *start_index, *n_entries);
@@ -881,17 +894,22 @@ void raft_uv_set_auto_recovery(struct raft_io *io, bool flag)
 static unsigned acquire_evs(struct uv *uv)
 {
 	unsigned x = 0;
-	while (!atomic_compare_exchange_weak_explicit(&uv->evs_next, &x, x|1, memory_order_acquire, memory_order_relaxed)) {
+	for (;;) {
 		if (x & 1) {
 			x++;
 		}
+		if (atomic_compare_exchange_weak_explicit(&uv->evs_next, &x, x|1, memory_order_acquire, memory_order_relaxed)) {
+			break;
+		}
 	}
+	assert(!(x & 1));
 	return x >> 1;
 }
 
 static void release_evs(struct uv *uv, unsigned i)
 {
-	atomic_store_explicit(&uv->evs_next, (i + 1) << 1, memory_order_release);
+	unsigned x = (i << 1) + 1;
+	assert(atomic_compare_exchange_strong_explicit(&uv->evs_next, &x, x + 1, memory_order_release, memory_order_relaxed));
 }
 
 void ruv_record_event(struct uv *uv, struct ruv_segment_event ev)

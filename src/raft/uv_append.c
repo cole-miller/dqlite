@@ -110,12 +110,8 @@ static void uvAppendFinishRequestsInQueue(struct uv *uv, queue *q, int status)
 		/* Rollback the append next index if the result was
 		 * unsuccessful. */
 		if (status != 0) {
-			tracef("rollback uv->append_next_index was:%llu",
-			       uv->append_next_index);
 			raft_index old_index = uv->append_next_index;
 			uv->append_next_index -= append->n;
-			tracef("rollback uv->append_next_index now:%llu",
-			       uv->append_next_index);
 			ruv_record_event(uv, (struct ruv_segment_event){
 				.type = RUV_EV_REWIND,
 				.rewind = {
@@ -123,6 +119,7 @@ static void uvAppendFinishRequestsInQueue(struct uv *uv, queue *q, int status)
 					.new_index = uv->append_next_index
 				}
 			});
+			tracef("RECORD REWIND old=%llu new=%llu", old_index, uv->append_next_index);
 		}
 		queue_remove(head);
 		queue_insert_tail(&queue_copy, head);
@@ -657,7 +654,7 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 	append->segment = segment;
 	queue_insert_tail(&uv->append_pending_reqs, &append->queue);
 
-	uint64_t old_index = uv->append_next_index;
+	raft_index old_index = uv->append_next_index;
 	uv->append_next_index += append->n;
 	ruv_record_event(uv, (struct ruv_segment_event){
 		.type = RUV_EV_APPEND,
@@ -667,7 +664,12 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 			.end_index = uv->append_next_index
 		}
 	});
-	tracef("set uv->append_next_index %llu", uv->append_next_index);
+
+	tracef("RECORD APPEND " /* ino=%lu */ "counter=%llu first=%llu end=%llu",
+			/* ruv_open_segment_ino(uv, segment->counter), */
+			segment->counter,
+			old_index,
+			uv->append_next_index);
 
 	return 0;
 

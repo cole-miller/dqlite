@@ -457,4 +457,14 @@ void UvRecvClose(struct uv *uv);
 
 void uvMaybeFireCloseCb(struct uv *uv);
 
+static inline uint64_t ruv_open_segment_ino(struct uv *uv, uvCounter ctr)
+{
+	char path[UV__PATH_SZ];
+	snprintf(path, sizeof(path), "%s/" UV__OPEN_TEMPLATE, uv->dir, ctr);
+	uv_stat_t sb;
+	int rv = UvOsStat(path, &sb);
+	assert(rv == 0);
+	return sb.st_ino;
+}
+
 #endif /* UV_H_ */
