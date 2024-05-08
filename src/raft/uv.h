@@ -499,7 +499,8 @@ static inline uint64_t ruv_open_segment_ino(struct uv *uv, uvCounter ctr)
 
 enum {
 	SEG_INIT,
-	SEG_PREPARED
+	SEG_PREPARED,
+	SEG_WRITTEN
 };
 
 #endif /* UV_H_ */

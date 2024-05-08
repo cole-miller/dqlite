@@ -189,6 +189,8 @@ static void uvAliveSegmentWriteCb(struct UvWriterReq *write, const int status)
 		goto out;
 	}
 
+	sm_move(&s->seg_sm, SEG_WRITTEN);
+
 	s->alive_written = s->alive_next_block * uv->block_size + s->alive_pending.n;
 	s->alive_last_index = s->alive_pending_last_index;
 
@@ -492,8 +494,13 @@ static const struct sm_conf seg_states[SM_STATES_MAX] = {
 	},
 	[SEG_PREPARED] = {
 		.flags = SM_FINAL,
-		.allowed = 0,
+		.allowed = BITS(SEG_WRITTEN),
 		.name = "prepared"
+	},
+	[SEG_WRITTEN] = {
+		.flags = SM_FINAL,
+		.allowed = BITS(SEG_WRITTEN),
+		.name = "written"
 	}
 };
 
