@@ -636,6 +636,8 @@ static int uvBootstrap(struct raft_io *io,
 		return rv;
 	}
 
+	uv->last_closed_end_index = 1;
+
 	return 0;
 }
 
@@ -673,6 +675,8 @@ static int uvRecover(struct raft_io *io, const struct raft_configuration *conf)
 	if (rv != 0) {
 		return rv;
 	}
+
+	uv->last_closed_end_index = next_index;
 
 	return 0;
 }

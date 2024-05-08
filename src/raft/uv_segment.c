@@ -957,6 +957,7 @@ int uvSegmentLoadAll(struct uv *uv,
 
 			raft_free(tmp_entries);
 			next_index += tmp_n;
+			uv->last_closed_end_index = next_index - 1;
 		}
 	}
 

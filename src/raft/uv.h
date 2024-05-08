@@ -110,6 +110,7 @@ struct uv
 	queue prepare_pool;             /* Prepared open segments */
 	uvCounter prepare_next_counter; /* Counter of next open segment */
 	raft_index append_next_index;   /* Index of next entry to append */
+	raft_index last_closed_end_index; /* End index of the last closed segment */
 	queue append_segments;          /* Open segments in use. */
 	queue append_pending_reqs;      /* Pending append requests. */
 	queue append_writing_reqs;      /* Append requests in flight */
