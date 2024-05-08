@@ -302,6 +302,7 @@ raft_uv_unit_test_LDADD = libtest.la $(UV_LIBS)
 raft_uv_integration_test_SOURCES = \
   $(libraft_la_SOURCES) \
   src/tracing.c \
+  src/lib/sm.c \
   test/raft/integration/main_uv.c \
   test/raft/integration/test_uv_init.c \
   test/raft/integration/test_uv_append.c \
