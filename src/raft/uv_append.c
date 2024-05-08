@@ -39,26 +39,6 @@
  * callbacks.
  **/
 
-/* An open segment being written or waiting to be written. */
-struct uvAliveSegment
-{
-	struct uv *uv;                  /* Our writer */
-	struct uvPrepare prepare;       /* Prepare segment file request */
-	struct UvWriter writer;         /* Writer to perform async I/O */
-	struct UvWriterReq write;       /* Write request */
-	unsigned long long counter;     /* Open segment counter */
-	raft_index first_index;         /* Index of the first entry written */
-	raft_index pending_last_index;  /* Index of the last entry written */
-	size_t size;                    /* Total number of bytes used */
-	unsigned next_block;            /* Next segment block to write */
-	struct uvSegmentBuffer pending; /* Buffer for data yet to be written */
-	uv_buf_t buf;                   /* Write buffer for current write */
-	raft_index last_index;          /* Last entry actually written */
-	size_t written;                 /* Number of bytes actually written */
-	queue queue;                    /* Segment queue */
-	struct UvBarrier *barrier;      /* Barrier waiting on this segment */
-	bool finalize;                  /* Finalize the segment after writing */
-};
 
 struct uvAppend
 {

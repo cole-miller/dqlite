@@ -9,6 +9,7 @@
 #include "../tracing.h"
 #include "err.h"
 #include "../lib/queue.h"
+#include "../lib/sm.h"
 #include "uv_fs.h"
 #include "uv_os.h"
 
@@ -428,6 +429,34 @@ void UvUnblock(struct uv *uv);
 /* Cancel all pending write requests and request the current segment to be
  * finalized. Must be invoked at closing time. */
 void uvAppendClose(struct uv *uv);
+
+struct ruv_segment {
+	struct uv *uv;                  /* Our writer */
+	struct sm seg_sm;
+
+	struct uvPrepare alive_prepare;       /* Prepare segment file request */
+	struct UvWriter alive_writer;         /* Writer to perform async I/O */
+	struct UvWriterReq alive_write;       /* Write request */
+	unsigned long long alive_counter;     /* Open segment counter */
+	raft_index alive_first_index;         /* Index of the first entry written */
+	raft_index alive_pending_last_index;  /* Index of the last entry written */
+	size_t alive_size;                    /* Total number of bytes used */
+	unsigned alive_next_block;            /* Next segment block to write */
+	struct uvSegmentBuffer alive_pending; /* Buffer for data yet to be written */
+	uv_buf_t alive_buf;                   /* Write buffer for current write */
+	raft_index alive_last_index;          /* Last entry actually written */
+	size_t alive_written;                 /* Number of bytes actually written */
+	queue alive_link;                    /* Segment queue */
+	struct UvBarrier *alive_barrier;      /* Barrier waiting on this segment */
+	bool alive_finalize;                  /* Finalize the segment after writing */
+
+	uvCounter dying_counter;      /* Segment counter */
+	size_t dying_used;            /* Number of used bytes */
+	raft_index dying_first_index; /* Index of first entry */
+	raft_index dying_last_index;  /* Index of last entry */
+	int dying_status;             /* Status code of blocking syscalls */
+	queue dying_link;            /* Link to finalize queue */
+};
 
 /* Submit a request to finalize the open segment with the given counter.
  *

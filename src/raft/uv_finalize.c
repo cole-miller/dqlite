@@ -4,19 +4,6 @@
 #include "uv.h"
 #include "uv_os.h"
 
-/* Metadata about an open segment not used anymore and that should be closed or
- * remove (if not written at all). */
-struct uvDyingSegment
-{
-	struct uv *uv;
-	uvCounter counter;      /* Segment counter */
-	size_t used;            /* Number of used bytes */
-	raft_index first_index; /* Index of first entry */
-	raft_index last_index;  /* Index of last entry */
-	int status;             /* Status code of blocking syscalls */
-	queue queue;            /* Link to finalize queue */
-};
-
 /* Run all blocking syscalls involved in closing a used open segment.
  *
  * An open segment is closed by truncating its length to the number of bytes
