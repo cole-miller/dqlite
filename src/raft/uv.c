@@ -898,15 +898,12 @@ void raft_uv_set_auto_recovery(struct raft_io *io, bool flag)
 static unsigned acquire_evs(struct uv *uv)
 {
 	unsigned x = 0;
-	for (;;) {
+	while (!atomic_compare_exchange_weak_explicit(&uv->evs_next, &x, x|1, memory_order_acquire, memory_order_relaxed)) {
 		if (x & 1) {
 			x++;
 		}
-		if (atomic_compare_exchange_weak_explicit(&uv->evs_next, &x, x|1, memory_order_acquire, memory_order_relaxed)) {
-			break;
-		}
 	}
-	assert(!(x & 1));
+	POST(!(x & 1));
 	return x >> 1;
 }
 
