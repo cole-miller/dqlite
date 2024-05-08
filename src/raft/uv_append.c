@@ -454,6 +454,8 @@ static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 		goto err;
 	}
 
+	sm_move(&segment->seg_sm, SEG_PREPARED);
+
 	assert(req->counter > 0);
 	assert(req->fd >= 0);
 
@@ -482,15 +484,16 @@ err:
 	uvAppendFinishPendingRequests(uv, rv);
 }
 
-enum {
-	SEG_INIT
-};
-
 static const struct sm_conf seg_states[SM_STATES_MAX] = {
 	[SEG_INIT] = {
 		.flags = SM_INITIAL|SM_FINAL,
-		.allowed = 0,
+		.allowed = BITS(SEG_PREPARED),
 		.name = "init"
+	},
+	[SEG_PREPARED] = {
+		.flags = SM_FINAL,
+		.allowed = 0,
+		.name = "prepared"
 	}
 };
 
