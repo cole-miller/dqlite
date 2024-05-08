@@ -59,13 +59,13 @@ sync:
 		goto err;
 	}
 
-	segment->status = 0;
+	segment->dying_status = 0;
 	return;
 
 err:
 	tracef("truncate segment %s: %s", filename1, errmsg);
 	assert(rv != 0);
-	segment->status = rv;
+	segment->dying_status = rv;
 }
 
 static int uvFinalizeStart(struct ruv_segment *segment);
@@ -80,7 +80,7 @@ static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 
 	assert(status == 0); /* We don't cancel worker requests */
 	uv->finalize_work.data = NULL;
-	if (segment->status != 0) {
+	if (segment->dying_status != 0) {
 		uv->errored = true;
 	}
 	RaftHeapFree(segment);
@@ -134,13 +134,13 @@ static int uvFinalizeStart(struct ruv_segment *segment)
 	return 0;
 }
 
-int UvFinalize(struct uv *uv,
-	       unsigned long long counter,
-	       size_t used,
-	       raft_index first_index,
-	       raft_index last_index)
+int UvFinalize(struct ruv_segment *segment)
 {
-	struct ruv_segment *segment;
+	struct uv *uv = segment->uv;
+	uvCounter counter = segment->alive_counter;
+	size_t used = segment->alive_written;
+	raft_index first_index = segment->alive_first_index;
+	raft_index last_index = segment->alive_last_index;
 	int rv;
 
 	if (used > 0) {
@@ -148,12 +148,6 @@ int UvFinalize(struct uv *uv,
 		assert(last_index >= first_index);
 	}
 
-	segment = RaftHeapMalloc(sizeof *segment);
-	if (segment == NULL) {
-		return RAFT_NOMEM;
-	}
-
-	segment->uv = uv;
 	segment->dying_counter = counter;
 	segment->dying_used = used;
 	segment->dying_first_index = first_index;

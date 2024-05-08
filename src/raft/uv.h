@@ -12,6 +12,7 @@
 #include "../lib/sm.h"
 #include "uv_fs.h"
 #include "uv_os.h"
+#include "uv_writer.h"
 
 /* 8 Megabytes */
 #define UV__MAX_SEGMENT_SIZE (8 * 1024 * 1024)
