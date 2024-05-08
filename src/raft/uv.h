@@ -462,11 +462,7 @@ struct ruv_segment {
  *
  * Requests are processed one at a time, to avoid ending up closing open segment
  * N + 1 before closing open segment N. */
-int UvFinalize(struct uv *uv,
-	       unsigned long long counter,
-	       size_t used,
-	       raft_index first_index,
-	       raft_index last_index);
+int UvFinalize(struct ruv_segment *seg);
 
 /* Implementation of raft_io->send. */
 int UvSend(struct raft_io *io,

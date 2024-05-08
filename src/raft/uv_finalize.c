@@ -10,34 +10,34 @@
  * that were actually written into it and then renaming it. */
 static void uvFinalizeWorkCb(uv_work_t *work)
 {
-	struct uvDyingSegment *segment = work->data;
+	struct ruv_segment *segment = work->data;
 	struct uv *uv = segment->uv;
 	char filename1[UV__FILENAME_LEN];
 	char filename2[UV__FILENAME_LEN];
 	char errmsg[RAFT_ERRMSG_BUF_SIZE];
 	int rv;
 
-	sprintf(filename1, UV__OPEN_TEMPLATE, segment->counter);
-	sprintf(filename2, UV__CLOSED_TEMPLATE, segment->first_index,
-		segment->last_index);
+	sprintf(filename1, UV__OPEN_TEMPLATE, segment->dying_counter);
+	sprintf(filename2, UV__CLOSED_TEMPLATE, segment->dying_first_index,
+		segment->dying_last_index);
 
 	ruv_record_event(uv, (struct ruv_segment_event){
 		.type = RUV_EV_FINALIZE,
 		.finalize = {
-			.counter = segment->counter,
-			.first_index = segment->first_index,
-			.end_index = segment->last_index
+			.counter = segment->dying_counter,
+			.first_index = segment->dying_first_index,
+			.end_index = segment->dying_last_index
 		}
 	});
 	tracef("RECORD FINALIZE ino=%lu counter=%llu first_index=%llu end_index=%llu",
-			ruv_open_segment_ino(uv, segment->counter),
-			segment->counter,
-			segment->first_index,
-			segment->last_index);
+			ruv_open_segment_ino(uv, segment->dying_counter),
+			segment->dying_counter,
+			segment->dying_first_index,
+			segment->dying_last_index);
 
 	/* If the segment hasn't actually been used (because the writer has been
 	 * closed or aborted before making any write), just remove it. */
-	if (segment->used == 0) {
+	if (segment->dying_used == 0) {
 		tracef("remove unused segment file: %s", filename1);
 		rv = UvFsRemoveFile(uv->dir, filename1, errmsg);
 		if (rv != 0) {
@@ -47,7 +47,7 @@ static void uvFinalizeWorkCb(uv_work_t *work)
 	}
 
 	/* Truncate and rename the segment.*/
-	rv = UvFsTruncateAndRenameFile(uv->dir, segment->used, filename1,
+	rv = UvFsTruncateAndRenameFile(uv->dir, segment->dying_used, filename1,
 				       filename2, errmsg);
 	if (rv != 0) {
 		goto err;
@@ -68,10 +68,10 @@ err:
 	segment->status = rv;
 }
 
-static int uvFinalizeStart(struct uvDyingSegment *segment);
+static int uvFinalizeStart(struct ruv_segment *segment);
 static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 {
-	struct uvDyingSegment *segment = work->data;
+	struct ruv_segment *segment = work->data;
 	struct uv *uv = segment->uv;
 	tracef("uv finalize after work segment %p cb status:%d",
 	       (void *)segment, status);
@@ -85,8 +85,8 @@ static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 	}
 	RaftHeapFree(segment);
 
-	assert(segment->first_index = uv->last_closed_end_index + 1);
-	uv->last_closed_end_index = segment->last_index;
+	assert(segment->dying_first_index = uv->last_closed_end_index + 1);
+	uv->last_closed_end_index = segment->dying_last_index;
 
 	/* If we have no more dismissed segments to close, check if there's a
 	 * barrier to unblock or if we are done closing. */
@@ -101,8 +101,8 @@ static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 
 	/* Grab a new dismissed segment to close. */
 	head = queue_head(&uv->finalize_reqs);
-	segment = QUEUE_DATA(head, struct uvDyingSegment, queue);
-	queue_remove(&segment->queue);
+	segment = QUEUE_DATA(head, struct ruv_segment, dying_link);
+	queue_remove(&segment->dying_link);
 
 	rv = uvFinalizeStart(segment);
 	if (rv != 0) {
@@ -112,13 +112,13 @@ static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 }
 
 /* Start finalizing an open segment. */
-static int uvFinalizeStart(struct uvDyingSegment *segment)
+static int uvFinalizeStart(struct ruv_segment *segment)
 {
 	struct uv *uv = segment->uv;
 	int rv;
 
 	assert(uv->finalize_work.data == NULL);
-	assert(segment->counter > 0);
+	assert(segment->dying_counter > 0);
 
 	uv->finalize_work.data = segment;
 
@@ -127,7 +127,7 @@ static int uvFinalizeStart(struct uvDyingSegment *segment)
 	if (rv != 0) {
 		ErrMsgPrintf(uv->io->errmsg,
 			     "start to truncate segment file %llu: %s",
-			     segment->counter, uv_strerror(rv));
+			     segment->dying_counter, uv_strerror(rv));
 		return RAFT_IOERR;
 	}
 
@@ -140,7 +140,7 @@ int UvFinalize(struct uv *uv,
 	       raft_index first_index,
 	       raft_index last_index)
 {
-	struct uvDyingSegment *segment;
+	struct ruv_segment *segment;
 	int rv;
 
 	if (used > 0) {
@@ -154,15 +154,15 @@ int UvFinalize(struct uv *uv,
 	}
 
 	segment->uv = uv;
-	segment->counter = counter;
-	segment->used = used;
-	segment->first_index = first_index;
-	segment->last_index = last_index;
+	segment->dying_counter = counter;
+	segment->dying_used = used;
+	segment->dying_first_index = first_index;
+	segment->dying_last_index = last_index;
 
 	/* If we're already processing a segment, let's put the request in the
 	 * queue and wait. */
 	if (uv->finalize_work.data != NULL) {
-		queue_insert_tail(&uv->finalize_reqs, &segment->queue);
+		queue_insert_tail(&uv->finalize_reqs, &segment->dying_link);
 		return 0;
 	}
 
