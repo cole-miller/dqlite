@@ -83,10 +83,11 @@ static void uvFinalizeAfterWorkCb(uv_work_t *work, int status)
 	if (segment->dying_status != 0) {
 		uv->errored = true;
 	}
-	RaftHeapFree(segment);
 
 	assert(segment->dying_first_index = uv->last_closed_end_index + 1);
 	uv->last_closed_end_index = segment->dying_last_index;
+
+	queue_insert_tail(&uv->closed_segments, &segment->closed_link);
 
 	/* If we have no more dismissed segments to close, check if there's a
 	 * barrier to unblock or if we are done closing. */

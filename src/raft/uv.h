@@ -118,6 +118,7 @@ struct uv
 	queue append_writing_reqs;      /* Append requests in flight */
 	struct UvBarrier *barrier;      /* Inflight barrier request */
 	queue finalize_reqs;            /* Segments waiting to be closed */
+	queue closed_segments;
 	struct uv_work_s finalize_work; /* Resize and rename segments */
 	struct uv_work_s truncate_work; /* Execute truncate log requests */
 	queue snapshot_get_reqs;        /* Inflight get snapshot requests */
@@ -457,6 +458,8 @@ struct ruv_segment {
 	raft_index dying_last_index;  /* Index of last entry */
 	int dying_status;             /* Status code of blocking syscalls */
 	queue dying_link;            /* Link to finalize queue */
+
+	queue closed_link;
 };
 
 /* Submit a request to finalize the open segment with the given counter.

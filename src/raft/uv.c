@@ -205,6 +205,19 @@ static int uvStart(struct raft_io *io,
 	return 0;
 }
 
+static void drain_closed_segments(struct uv *uv)
+{
+	queue *head = &uv->closed_segments;
+	queue *cur = queue_next(head);
+	while (cur != head) {
+		queue *next = queue_next(cur);
+		struct ruv_segment *seg = QUEUE_DATA(cur, struct ruv_segment, closed_link);
+		sm_fini(&seg->seg_sm);
+		RaftHeapFree(seg);
+		cur = next;
+	}
+}
+
 void uvMaybeFireCloseCb(struct uv *uv)
 {
 	tracef("uv maybe fire close cb");
@@ -245,6 +258,8 @@ void uvMaybeFireCloseCb(struct uv *uv)
 	if (!queue_empty(&uv->aborting)) {
 		return;
 	}
+
+	drain_closed_segments(uv);
 
 	assert(uv->truncate_work.data == NULL);
 
@@ -787,6 +802,7 @@ int raft_uv_init(struct raft_io *io,
 	queue_init(&uv->append_writing_reqs);
 	uv->barrier = NULL;
 	queue_init(&uv->finalize_reqs);
+	queue_init(&uv->closed_segments);
 	uv->finalize_work.data = NULL;
 	uv->truncate_work.data = NULL;
 	queue_init(&uv->snapshot_get_reqs);
