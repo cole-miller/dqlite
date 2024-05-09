@@ -47,29 +47,29 @@ struct uvIdleSegment
 
 static void uvPrepareWorkCb(uv_work_t *work)
 {
-	struct uvIdleSegment *segment = work->data;
+	struct ruv_segment *segment = work->data;
 	struct uv *uv = segment->uv;
 	int rv;
 
-	rv = UvFsAllocateFile(uv->dir, segment->filename, segment->size,
-			      &segment->fd, uv->fallocate, segment->errmsg);
+	rv = UvFsAllocateFile(uv->dir, segment->idle_filename, segment->idle_size,
+			      &segment->idle_fd, uv->fallocate, segment->idle_errmsg);
 	if (rv != 0) {
 		goto err;
 	}
 
-	rv = UvFsSyncDir(uv->dir, segment->errmsg);
+	rv = UvFsSyncDir(uv->dir, segment->idle_errmsg);
 	if (rv != 0) {
 		goto err_after_allocate;
 	}
 
-	segment->status = 0;
+	segment->idle_status = 0;
 	return;
 
 err_after_allocate:
-	UvOsClose(segment->fd);
+	UvOsClose(segment->idle_fd);
 err:
 	assert(rv != 0);
-	segment->status = rv;
+	segment->idle_status = rv;
 	return;
 }
 
@@ -91,15 +91,13 @@ static void uvPrepareFinishAllRequests(struct uv *uv, int status)
  * through the given pointers. */
 static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter)
 {
-	queue *head;
-	struct uvIdleSegment *segment;
 	/* Pop a segment from the pool. */
-	head = queue_head(&uv->prepare_pool);
-	segment = QUEUE_DATA(head, struct uvIdleSegment, queue);
-	assert(segment->fd >= 0);
-	queue_remove(&segment->queue);
-	*fd = segment->fd;
-	*counter = segment->counter;
+	queue *head = queue_head(&uv->prepare_pool);
+	struct ruv_segment *segment = QUEUE_DATA(head, struct ruv_segment, idle_link);
+	assert(segment->idle_fd >= 0);
+	queue_remove(&segment->idle_link);
+	*fd = segment->idle_fd;
+	*counter = segment->idle_counter;
 	RaftHeapFree(segment);
 }
 
@@ -142,13 +140,12 @@ static void uvPrepareAfterWorkCb(uv_work_t *work, int status);
 /* Start creating a new segment file. */
 static int uvPrepareStart(struct uv *uv)
 {
-	struct uvIdleSegment *segment;
 	int rv;
 
 	assert(uv->prepare_inflight == NULL);
 	assert(uvPrepareCount(uv) < UV__TARGET_POOL_SIZE);
 
-	segment = RaftHeapMalloc(sizeof *segment);
+	struct ruv_segment *segment = RaftHeapMalloc(sizeof *segment);
 	if (segment == NULL) {
 		rv = RAFT_NOMEM;
 		goto err;
@@ -156,19 +153,19 @@ static int uvPrepareStart(struct uv *uv)
 
 	memset(segment, 0, sizeof *segment);
 	segment->uv = uv;
-	segment->counter = uv->prepare_next_counter;
-	segment->work.data = segment;
-	segment->fd = -1;
-	segment->size = uv->block_size * uvSegmentBlocks(uv);
-	sprintf(segment->filename, UV__OPEN_TEMPLATE, segment->counter);
+	segment->idle_counter = uv->prepare_next_counter;
+	segment->idle_work.data = segment;
+	segment->idle_fd = -1;
+	segment->idle_size = uv->block_size * uvSegmentBlocks(uv);
+	sprintf(segment->idle_filename, UV__OPEN_TEMPLATE, segment->idle_counter);
 
-	tracef("create open segment %s", segment->filename);
-	rv = uv_queue_work(uv->loop, &segment->work, uvPrepareWorkCb,
+	tracef("create open segment %s", segment->idle_filename);
+	rv = uv_queue_work(uv->loop, &segment->idle_work, uvPrepareWorkCb,
 			   uvPrepareAfterWorkCb);
 	if (rv != 0) {
 		/* UNTESTED: with the current libuv implementation this can't
 		 * fail. */
-		tracef("can't create segment %s: %s", segment->filename,
+		tracef("can't create segment %s: %s", segment->idle_filename,
 		       uv_strerror(rv));
 		rv = RAFT_IOERR;
 		goto err_after_segment_alloc;
@@ -188,7 +185,7 @@ err:
 
 static void uvPrepareAfterWorkCb(uv_work_t *work, int status)
 {
-	struct uvIdleSegment *segment = work->data;
+	struct ruv_segment *segment = work->data;
 	struct uv *uv = segment->uv;
 	int rv;
 	assert(status == 0);
@@ -201,12 +198,12 @@ static void uvPrepareAfterWorkCb(uv_work_t *work, int status)
 	if (uv->closing) {
 		assert(queue_empty(&uv->prepare_pool));
 		assert(queue_empty(&uv->prepare_reqs));
-		if (segment->status == 0) {
+		if (segment->idle_status == 0) {
 			char errmsg[RAFT_ERRMSG_BUF_SIZE];
-			UvOsClose(segment->fd);
-			UvFsRemoveFile(uv->dir, segment->filename, errmsg);
+			UvOsClose(segment->idle_fd);
+			UvFsRemoveFile(uv->dir, segment->idle_filename, errmsg);
 		}
-		tracef("canceled creation of %s", segment->filename);
+		tracef("canceled creation of %s", segment->idle_filename);
 		RaftHeapFree(segment);
 		uvMaybeFireCloseCb(uv);
 		return;
@@ -217,21 +214,21 @@ static void uvPrepareAfterWorkCb(uv_work_t *work, int status)
 	 *
 	 * Note that if there's no pending request, we don't set the error
 	 * message, to avoid overwriting previous errors. */
-	if (segment->status != 0) {
+	if (segment->idle_status != 0) {
 		if (!queue_empty(&uv->prepare_reqs)) {
-			ErrMsgTransferf(segment->errmsg, uv->io->errmsg,
-					"create segment %s", segment->filename);
-			uvPrepareFinishAllRequests(uv, segment->status);
+			ErrMsgTransferf(segment->idle_errmsg, uv->io->errmsg,
+					"create segment %s", segment->idle_filename);
+			uvPrepareFinishAllRequests(uv, segment->idle_status);
 		}
 		uv->errored = true;
 		RaftHeapFree(segment);
 		return;
 	}
 
-	assert(segment->fd >= 0);
+	assert(segment->idle_fd >= 0);
 
-	tracef("completed creation of %s", segment->filename);
-	queue_insert_tail(&uv->prepare_pool, &segment->queue);
+	tracef("completed creation of %s", segment->idle_filename);
+	queue_insert_tail(&uv->prepare_pool, &segment->idle_link);
 
 	/* Let's process any pending request. */
 	if (!queue_empty(&uv->prepare_reqs)) {
@@ -326,12 +323,10 @@ void UvPrepareClose(struct uv *uv)
 
 	/* Remove any unused prepared segment. */
 	while (!queue_empty(&uv->prepare_pool)) {
-		queue *head;
-		struct uvIdleSegment *segment;
-		head = queue_head(&uv->prepare_pool);
-		segment = QUEUE_DATA(head, struct uvIdleSegment, queue);
-		queue_remove(&segment->queue);
-		uvPrepareDiscard(uv, segment->fd, segment->counter);
+		queue *head = queue_head(&uv->prepare_pool);
+		struct ruv_segment *segment = QUEUE_DATA(head, struct ruv_segment, idle_link);
+		queue_remove(&segment->idle_link);
+		uvPrepareDiscard(uv, segment->idle_fd, segment->idle_counter);
 		RaftHeapFree(segment);
 	}
 }
