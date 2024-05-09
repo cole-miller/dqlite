@@ -436,6 +436,15 @@ struct ruv_segment {
 	struct uv *uv;                  /* Our writer */
 	struct sm seg_sm;
 
+	size_t idle_size;           /* Segment size */
+	struct uv_work_s idle_work; /* To execute logic in the threadpool */
+	int idle_status;            /* Result of threadpool callback */
+	char idle_errmsg[RAFT_ERRMSG_BUF_SIZE]; /* Error of threadpool callback */
+	unsigned long long idle_counter;        /* Segment counter */
+	char idle_filename[UV__FILENAME_LEN];   /* Filename of the segment */
+	uv_file idle_fd;  /* File descriptor of prepared file */
+	queue idle_link; /* Pool */
+
 	struct uvPrepare alive_prepare;       /* Prepare segment file request */
 	struct UvWriter alive_writer;         /* Writer to perform async I/O */
 	struct UvWriterReq alive_write;       /* Write request */
