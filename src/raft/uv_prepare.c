@@ -121,6 +121,32 @@ static unsigned uvPrepareCount(struct uv *uv)
 	return n;
 }
 
+static const struct sm_conf seg_states[SM_STATES_MAX] = {
+	[SEG_INIT] = {
+		.flags = SM_INITIAL|SM_FINAL,
+		.allowed = BITS(SEG_PREPARED),
+		.name = "init"
+	},
+	[SEG_PREPARED] = {
+		.flags = SM_FINAL,
+		.allowed = BITS(SEG_WRITTEN),
+		.name = "prepared"
+	},
+	[SEG_WRITTEN] = {
+		.flags = SM_FINAL,
+		.allowed = BITS(SEG_WRITTEN),
+		.name = "written"
+	}
+};
+
+static bool seg_invariant(const struct sm *sm, int prev)
+{
+	/* TODO */
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
 static void uvPrepareAfterWorkCb(uv_work_t *work, int status);
 
 /* Start creating a new segment file. */
@@ -144,6 +170,7 @@ static int uvPrepareStart(struct uv *uv)
 	segment->idle_fd = -1;
 	segment->idle_size = uv->block_size * uvSegmentBlocks(uv);
 	sprintf(segment->idle_filename, UV__OPEN_TEMPLATE, segment->idle_counter);
+	sm_init(&segment->seg_sm, seg_invariant, NULL, seg_states, SEG_INIT);
 
 	tracef("create open segment %s", segment->idle_filename);
 	rv = uv_queue_work(uv->loop, &segment->idle_work, uvPrepareWorkCb,

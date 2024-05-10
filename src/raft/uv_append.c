@@ -411,6 +411,25 @@ err:
 	return rv;
 }
 
+/* Initialize a new open segment object. */
+static void uvAliveSegmentInit(struct ruv_segment *s, struct uv *uv)
+{
+	s->uv = uv;
+	s->alive_prepare.data = s;
+	s->alive_writer.data = s;
+	s->alive_write.data = s;
+	s->alive_counter = 0;
+	s->alive_first_index = uv->append_next_index;
+	s->alive_pending_last_index = s->alive_first_index - 1;
+	s->alive_last_index = 0;
+	s->alive_size = sizeof(uint64_t) /* Format version */;
+	s->alive_next_block = 0;
+	uvSegmentBufferInit(&s->alive_pending, uv->block_size);
+	s->alive_written = 0;
+	s->alive_barrier = NULL;
+	s->alive_finalize = false;
+}
+
 /* Invoked when a newly added open segment becomes ready for writing, after the
  * associated UvPrepare request completes (either synchronously or
  * asynchronously). */
@@ -433,7 +452,7 @@ static int uvAliveSegmentReady(struct uv *uv,
 
 static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 {
-	struct ruv_segment *segment = req->data;
+	struct ruv_segment *segment = req->segment;
 	struct uv *uv = segment->uv;
 	int rv;
 
@@ -442,10 +461,8 @@ static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 
 	/* If we have been closed, let's discard the segment. */
 	if (uv->closing) {
-		queue_remove(&segment->alive_link);
 		assert(status ==
 		       RAFT_CANCELED); /* UvPrepare cancels pending reqs */
-		uvSegmentBufferClose(&segment->alive_pending);
 		RaftHeapFree(segment);
 		return;
 	}
@@ -460,6 +477,9 @@ static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 
 	assert(req->counter > 0);
 	assert(req->fd >= 0);
+
+	uvAliveSegmentInit(segment, uv);
+	queue_insert_tail(&uv->append_segments, &segment->alive_link);
 
 	/* There must be pending appends that were waiting for this prepare
 	 * requests. */
@@ -480,56 +500,9 @@ static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 	return;
 
 err:
-	queue_remove(&segment->alive_link);
 	RaftHeapFree(segment);
 	uv->errored = true;
 	uvAppendFinishPendingRequests(uv, rv);
-}
-
-static const struct sm_conf seg_states[SM_STATES_MAX] = {
-	[SEG_INIT] = {
-		.flags = SM_INITIAL|SM_FINAL,
-		.allowed = BITS(SEG_PREPARED),
-		.name = "init"
-	},
-	[SEG_PREPARED] = {
-		.flags = SM_FINAL,
-		.allowed = BITS(SEG_WRITTEN),
-		.name = "prepared"
-	},
-	[SEG_WRITTEN] = {
-		.flags = SM_FINAL,
-		.allowed = BITS(SEG_WRITTEN),
-		.name = "written"
-	}
-};
-
-static bool seg_invariant(const struct sm *sm, int prev)
-{
-	/* TODO */
-	(void)sm;
-	(void)prev;
-	return true;
-}
-
-/* Initialize a new open segment object. */
-static void uvAliveSegmentInit(struct ruv_segment *s, struct uv *uv)
-{
-	s->uv = uv;
-	s->alive_prepare.data = s;
-	s->alive_writer.data = s;
-	s->alive_write.data = s;
-	s->alive_counter = 0;
-	s->alive_first_index = uv->append_next_index;
-	s->alive_pending_last_index = s->alive_first_index - 1;
-	s->alive_last_index = 0;
-	s->alive_size = sizeof(uint64_t) /* Format version */;
-	s->alive_next_block = 0;
-	uvSegmentBufferInit(&s->alive_pending, uv->block_size);
-	s->alive_written = 0;
-	s->alive_barrier = NULL;
-	s->alive_finalize = false;
-	sm_init(&s->seg_sm, seg_invariant, NULL, seg_states, SEG_INIT);
 }
 
 /* Add a new active open segment, since the append request being submitted does
