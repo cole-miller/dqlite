@@ -338,13 +338,54 @@ int UvList(struct uv *uv,
 /* Request to obtain a newly prepared open segment. */
 struct uvPrepare;
 typedef void (*uvPrepareCb)(struct uvPrepare *req, int status);
+struct ruv_segment;
 struct uvPrepare
 {
 	void *data;                 /* User data */
 	uv_file fd;                 /* Resulting segment file descriptor */
 	unsigned long long counter; /* Resulting segment counter */
+	struct ruv_segment *segment;
 	uvPrepareCb cb;             /* Completion callback */
 	queue queue;                /* Links in uv_io->prepare_reqs */
+};
+
+struct ruv_segment {
+	struct uv *uv;                  /* Our writer */
+	struct sm seg_sm;
+
+	size_t idle_size;           /* Segment size */
+	struct uv_work_s idle_work; /* To execute logic in the threadpool */
+	int idle_status;            /* Result of threadpool callback */
+	char idle_errmsg[RAFT_ERRMSG_BUF_SIZE]; /* Error of threadpool callback */
+	unsigned long long idle_counter;        /* Segment counter */
+	char idle_filename[UV__FILENAME_LEN];   /* Filename of the segment */
+	uv_file idle_fd;  /* File descriptor of prepared file */
+	queue idle_link; /* Pool */
+
+	struct uvPrepare alive_prepare;       /* Prepare segment file request */
+	struct UvWriter alive_writer;         /* Writer to perform async I/O */
+	struct UvWriterReq alive_write;       /* Write request */
+	unsigned long long alive_counter;     /* Open segment counter */
+	raft_index alive_first_index;         /* Index of the first entry written */
+	raft_index alive_pending_last_index;  /* Index of the last entry written */
+	size_t alive_size;                    /* Total number of bytes used */
+	unsigned alive_next_block;            /* Next segment block to write */
+	struct uvSegmentBuffer alive_pending; /* Buffer for data yet to be written */
+	uv_buf_t alive_buf;                   /* Write buffer for current write */
+	raft_index alive_last_index;          /* Last entry actually written */
+	size_t alive_written;                 /* Number of bytes actually written */
+	queue alive_link;                    /* Segment queue */
+	struct UvBarrier *alive_barrier;      /* Barrier waiting on this segment */
+	bool alive_finalize;                  /* Finalize the segment after writing */
+
+	uvCounter dying_counter;      /* Segment counter */
+	size_t dying_used;            /* Number of used bytes */
+	raft_index dying_first_index; /* Index of first entry */
+	raft_index dying_last_index;  /* Index of last entry */
+	int dying_status;             /* Status code of blocking syscalls */
+	queue dying_link;            /* Link to finalize queue */
+
+	queue closed_link;
 };
 
 /* Get a prepared open segment ready for writing. If a prepared open segment is
@@ -355,6 +396,7 @@ struct uvPrepare
 int UvPrepare(struct uv *uv,
 	      uv_file *fd,
 	      uvCounter *counter,
+	      struct ruv_segment **segment,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb);
 
@@ -431,45 +473,6 @@ void UvUnblock(struct uv *uv);
 /* Cancel all pending write requests and request the current segment to be
  * finalized. Must be invoked at closing time. */
 void uvAppendClose(struct uv *uv);
-
-struct ruv_segment {
-	struct uv *uv;                  /* Our writer */
-	struct sm seg_sm;
-
-	size_t idle_size;           /* Segment size */
-	struct uv_work_s idle_work; /* To execute logic in the threadpool */
-	int idle_status;            /* Result of threadpool callback */
-	char idle_errmsg[RAFT_ERRMSG_BUF_SIZE]; /* Error of threadpool callback */
-	unsigned long long idle_counter;        /* Segment counter */
-	char idle_filename[UV__FILENAME_LEN];   /* Filename of the segment */
-	uv_file idle_fd;  /* File descriptor of prepared file */
-	queue idle_link; /* Pool */
-
-	struct uvPrepare alive_prepare;       /* Prepare segment file request */
-	struct UvWriter alive_writer;         /* Writer to perform async I/O */
-	struct UvWriterReq alive_write;       /* Write request */
-	unsigned long long alive_counter;     /* Open segment counter */
-	raft_index alive_first_index;         /* Index of the first entry written */
-	raft_index alive_pending_last_index;  /* Index of the last entry written */
-	size_t alive_size;                    /* Total number of bytes used */
-	unsigned alive_next_block;            /* Next segment block to write */
-	struct uvSegmentBuffer alive_pending; /* Buffer for data yet to be written */
-	uv_buf_t alive_buf;                   /* Write buffer for current write */
-	raft_index alive_last_index;          /* Last entry actually written */
-	size_t alive_written;                 /* Number of bytes actually written */
-	queue alive_link;                    /* Segment queue */
-	struct UvBarrier *alive_barrier;      /* Barrier waiting on this segment */
-	bool alive_finalize;                  /* Finalize the segment after writing */
-
-	uvCounter dying_counter;      /* Segment counter */
-	size_t dying_used;            /* Number of used bytes */
-	raft_index dying_first_index; /* Index of first entry */
-	raft_index dying_last_index;  /* Index of last entry */
-	int dying_status;             /* Status code of blocking syscalls */
-	queue dying_link;            /* Link to finalize queue */
-
-	queue closed_link;
-};
 
 /* Submit a request to finalize the open segment with the given counter.
  *

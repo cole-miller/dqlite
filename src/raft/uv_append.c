@@ -542,17 +542,13 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 	uvCounter counter;
 	int rv;
 
-	segment = RaftHeapMalloc(sizeof *segment);
-	if (segment == NULL) {
+	struct uvPrepare *req = RaftHeapMalloc(sizeof(*req));
+	if (req == NULL) {
 		rv = RAFT_NOMEM;
 		goto err;
 	}
-	uvAliveSegmentInit(segment, uv);
 
-	queue_insert_tail(&uv->append_segments, &segment->alive_link);
-
-	rv = UvPrepare(uv, &fd, &counter, &segment->alive_prepare,
-		       uvAliveSegmentPrepareCb);
+	rv = UvPrepare(uv, &fd, &counter, &segment, req, uvAliveSegmentPrepareCb);
 	if (rv != 0) {
 		goto err_after_alloc;
 	}
@@ -560,6 +556,8 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 	/* If we've been returned a ready prepared segment right away, start
 	 * writing to it immediately. */
 	if (fd != -1) {
+		uvAliveSegmentInit(segment, uv);
+		queue_insert_tail(&uv->append_segments, &segment->alive_link);
 		rv = uvAliveSegmentReady(uv, fd, counter, segment);
 		if (rv != 0) {
 			goto err_after_prepare;
@@ -570,9 +568,9 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 err_after_prepare:
 	UvOsClose(fd);
 	UvFinalize(segment);
-err_after_alloc:
 	queue_remove(&segment->alive_link);
-	RaftHeapFree(segment);
+err_after_alloc:
+	RaftHeapFree(req);
 err:
 	assert(rv != 0);
 	return rv;
@@ -658,6 +656,7 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 	}
 
 	segment = uvGetLastAliveSegment(uv); /* Get the last added segment */
+	assert(segment != NULL);
 	uvAliveSegmentReserveSegmentCapacity(segment, size);
 
 	append->segment = segment;

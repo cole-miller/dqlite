@@ -89,7 +89,7 @@ static void uvPrepareFinishAllRequests(struct uv *uv, int status)
 
 /* Pop the oldest prepared segment in the pool and return its fd and counter
  * through the given pointers. */
-static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter)
+static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter, struct ruv_segment **segment_out)
 {
 	/* Pop a segment from the pool. */
 	queue *head = queue_head(&uv->prepare_pool);
@@ -98,7 +98,7 @@ static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter)
 	queue_remove(&segment->idle_link);
 	*fd = segment->idle_fd;
 	*counter = segment->idle_counter;
-	RaftHeapFree(segment);
+	*segment_out = segment;
 }
 
 /* Finish the oldest pending prepare request using the next available prepared
@@ -118,7 +118,7 @@ static void uvPrepareFinishOldestRequest(struct uv *uv)
 	queue_remove(&req->queue);
 
 	/* Finish the request */
-	uvPrepareConsume(uv, &req->fd, &req->counter);
+	uvPrepareConsume(uv, &req->fd, &req->counter, &req->segment);
 	req->cb(req, 0);
 }
 
@@ -260,7 +260,7 @@ static void uvPrepareAfterWorkCb(uv_work_t *work, int status)
 
 /* Discard a prepared open segment, closing its file descriptor and removing the
  * underlying file. */
-static void uvPrepareDiscard(struct uv *uv, uv_file fd, uvCounter counter)
+static void uvPrepareDiscard(struct uv *uv, uv_file fd, uvCounter counter, struct ruv_segment *segment)
 {
 	char errmsg[RAFT_ERRMSG_BUF_SIZE];
 	char filename[UV__FILENAME_LEN];
@@ -269,11 +269,13 @@ static void uvPrepareDiscard(struct uv *uv, uv_file fd, uvCounter counter)
 	sprintf(filename, UV__OPEN_TEMPLATE, counter);
 	UvOsClose(fd);
 	UvFsRemoveFile(uv->dir, filename, errmsg);
+	RaftHeapFree(segment);
 }
 
 int UvPrepare(struct uv *uv,
 	      uv_file *fd,
 	      uvCounter *counter,
+	      struct ruv_segment **segment_out,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb)
 {
@@ -282,12 +284,13 @@ int UvPrepare(struct uv *uv,
 	assert(!uv->closing);
 
 	if (!queue_empty(&uv->prepare_pool)) {
-		uvPrepareConsume(uv, fd, counter);
+		uvPrepareConsume(uv, fd, counter, segment_out);
 		goto maybe_start;
 	}
 
 	*fd = -1;
 	*counter = 0;
+	*segment_out = NULL;
 	req->cb = cb;
 	queue_insert_tail(&uv->prepare_reqs, &req->queue);
 
@@ -306,7 +309,7 @@ maybe_start:
 
 err:
 	if (*fd != -1) {
-		uvPrepareDiscard(uv, *fd, *counter);
+		uvPrepareDiscard(uv, *fd, *counter, *segment_out);
 	} else {
 		queue_remove(&req->queue);
 	}
@@ -326,7 +329,7 @@ void UvPrepareClose(struct uv *uv)
 		queue *head = queue_head(&uv->prepare_pool);
 		struct ruv_segment *segment = QUEUE_DATA(head, struct ruv_segment, idle_link);
 		queue_remove(&segment->idle_link);
-		uvPrepareDiscard(uv, segment->idle_fd, segment->idle_counter);
+		uvPrepareDiscard(uv, segment->idle_fd, segment->idle_counter, segment);
 		RaftHeapFree(segment);
 	}
 }
