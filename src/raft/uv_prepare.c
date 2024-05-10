@@ -31,20 +31,6 @@
 /* Number of open segments that we try to keep ready for writing. */
 #define UV__TARGET_POOL_SIZE 2
 
-/* An open segment being prepared or sitting in the pool */
-struct uvIdleSegment
-{
-	struct uv *uv;         /* Open segment file */
-	size_t size;           /* Segment size */
-	struct uv_work_s work; /* To execute logic in the threadpool */
-	int status;            /* Result of threadpool callback */
-	char errmsg[RAFT_ERRMSG_BUF_SIZE]; /* Error of threadpool callback */
-	unsigned long long counter;        /* Segment counter */
-	char filename[UV__FILENAME_LEN];   /* Filename of the segment */
-	uv_file fd;  /* File descriptor of prepared file */
-	queue queue; /* Pool */
-};
-
 static void uvPrepareWorkCb(uv_work_t *work)
 {
 	struct ruv_segment *segment = work->data;
