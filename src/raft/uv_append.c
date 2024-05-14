@@ -622,10 +622,16 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 	/* If there's no segment or if this batch does not fit in this segment,
 	 * we need to add a new one. */
 	if (!fits) {
-		rv = uvAppendPushAliveSegment(uv);
+		struct uvPrepare *req = RaftHeapMalloc(sizeof(*req));
+		if (req == NULL) {
+			rv = RAFT_NOMEM;
+			goto err;
+		}
+		rv = UvPrepare(uv, req, uvAppendPrepareCb);
 		if (rv != 0) {
 			goto err;
 		}
+		return 0;
 	}
 
 	segment = uvGetLastAliveSegment(uv); /* Get the last added segment */

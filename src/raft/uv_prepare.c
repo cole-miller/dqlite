@@ -286,24 +286,24 @@ static void uvPrepareDiscard(struct uv *uv, uv_file fd, uvCounter counter, struc
 }
 
 int UvPrepare(struct uv *uv,
-	      uv_file *fd,
-	      uvCounter *counter,
-	      struct ruv_segment **segment_out,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb)
 {
+	uv_file fd = -1;
+	uvCounter counter = 0;
+	struct ruv_segment *segment = NULL;
 	int rv;
 
 	assert(!uv->closing);
 
 	if (!queue_empty(&uv->prepare_pool)) {
-		uvPrepareConsume(uv, fd, counter, segment_out);
+		uvPrepareConsume(uv, &fd, &counter, &segment);
+		req->fd = fd;
+		req->counter = counter;
+		req->segment = segment;
 		goto maybe_start;
 	}
 
-	*fd = -1;
-	*counter = 0;
-	*segment_out = NULL;
 	req->cb = cb;
 	queue_insert_tail(&uv->prepare_reqs, &req->queue);
 
@@ -318,11 +318,14 @@ maybe_start:
 		goto err;
 	}
 
+	if (fd != -1) {
+		req->cb(req, 0);
+	}
 	return 0;
 
 err:
-	if (*fd != -1) {
-		uvPrepareDiscard(uv, *fd, *counter, *segment_out);
+	if (fd != -1) {
+		uvPrepareDiscard(uv, fd, counter, segment);
 	} else {
 		queue_remove(&req->queue);
 	}

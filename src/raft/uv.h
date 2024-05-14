@@ -341,12 +341,12 @@ typedef void (*uvPrepareCb)(struct uvPrepare *req, int status);
 struct ruv_segment;
 struct uvPrepare
 {
-	void *data;                 /* User data */
-	uv_file fd;                 /* Resulting segment file descriptor */
-	unsigned long long counter; /* Resulting segment counter */
-	struct ruv_segment *segment;
-	uvPrepareCb cb;             /* Completion callback */
-	queue queue;                /* Links in uv_io->prepare_reqs */
+	void *data;                  /* User data */
+	uv_file fd;                  /* Resulting segment file descriptor */
+	unsigned long long counter;  /* Resulting segment counter */
+	struct ruv_segment *segment; /* Resulting segment */
+	uvPrepareCb cb;              /* Completion callback */
+	queue queue;                 /* Links in uv_io->prepare_reqs */
 };
 
 struct ruv_segment {
@@ -388,15 +388,9 @@ struct ruv_segment {
 	queue closed_link;
 };
 
-/* Get a prepared open segment ready for writing. If a prepared open segment is
- * already available in the pool, it will be returned immediately using the fd
- * and counter pointers and the request callback won't be invoked. Otherwise the
- * request will be queued and its callback invoked once a newly prepared segment
- * is available. */
+/* Get a prepared open segment ready for writing. The callback will be invoked
+ * once a prepared segment is available. */
 int UvPrepare(struct uv *uv,
-	      uv_file *fd,
-	      uvCounter *counter,
-	      struct ruv_segment **segment,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb);
 
