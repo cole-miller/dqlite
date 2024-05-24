@@ -6,6 +6,31 @@
 #include "uv.h"
 #include "uv_os.h"
 
+static struct sm_conf seg_states[SEG_NSTATES] = {
+	[SEG_IDLE] = {
+		.flags = SM_INITIAL,
+		.allowed = BITS(SEG_PREPARED),
+		.name = "idle"
+	},
+	[SEG_PREPARED] = {
+		.flags = 0,
+		.allowed = BITS(SEG_ALIVE),
+		.name = "prepared"
+	},
+	[SEG_ALIVE] = {
+		.flags = 0,
+		.allowed = 0,
+		.name = "alive"
+	}
+};
+
+bool seg_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
 /* The happy path for UvPrepare is:
  *
  * - If there is an unused open segment available, return its fd and counter
@@ -43,6 +68,7 @@ struct uvIdleSegment
 	char filename[UV__FILENAME_LEN];   /* Filename of the segment */
 	uv_file fd;  /* File descriptor of prepared file */
 	queue queue; /* Pool */
+	struct sm *sm;
 };
 
 static void uvPrepareWorkCb(uv_work_t *work)
@@ -89,7 +115,7 @@ static void uvPrepareFinishAllRequests(struct uv *uv, int status)
 
 /* Pop the oldest prepared segment in the pool and return its fd and counter
  * through the given pointers. */
-static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter)
+static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter, struct sm **sm)
 {
 	queue *head;
 	struct uvIdleSegment *segment;
@@ -100,6 +126,7 @@ static void uvPrepareConsume(struct uv *uv, uv_file *fd, uvCounter *counter)
 	queue_remove(&segment->queue);
 	*fd = segment->fd;
 	*counter = segment->counter;
+	*sm = segment->sm;
 	RaftHeapFree(segment);
 }
 
@@ -120,7 +147,7 @@ static void uvPrepareFinishOldestRequest(struct uv *uv)
 	queue_remove(&req->queue);
 
 	/* Finish the request */
-	uvPrepareConsume(uv, &req->fd, &req->counter);
+	uvPrepareConsume(uv, &req->fd, &req->counter, &req->sm);
 	req->cb(req, 0);
 }
 
@@ -153,8 +180,14 @@ static int uvPrepareStart(struct uv *uv)
 		rv = RAFT_NOMEM;
 		goto err;
 	}
-
 	memset(segment, 0, sizeof *segment);
+
+	segment->sm = RaftHeapMalloc(sizeof(*segment->sm));
+	if (segment->sm == NULL) {
+		rv = RAFT_NOMEM;
+		goto err_after_segment_alloc;
+	}
+	sm_init(segment->sm, seg_invariant, NULL, seg_states, SEG_IDLE);
 	segment->uv = uv;
 	segment->counter = uv->prepare_next_counter;
 	segment->work.data = segment;
@@ -231,6 +264,7 @@ static void uvPrepareAfterWorkCb(uv_work_t *work, int status)
 	assert(segment->fd >= 0);
 
 	tracef("completed creation of %s", segment->filename);
+	sm_move(segment->sm, SEG_PREPARED);
 	queue_insert_tail(&uv->prepare_pool, &segment->queue);
 
 	/* Let's process any pending request. */
@@ -277,6 +311,7 @@ static void uvPrepareDiscard(struct uv *uv, uv_file fd, uvCounter counter)
 int UvPrepare(struct uv *uv,
 	      uv_file *fd,
 	      uvCounter *counter,
+	      struct sm **sm,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb)
 {
@@ -285,12 +320,13 @@ int UvPrepare(struct uv *uv,
 	assert(!uv->closing);
 
 	if (!queue_empty(&uv->prepare_pool)) {
-		uvPrepareConsume(uv, fd, counter);
+		uvPrepareConsume(uv, fd, counter, sm);
 		goto maybe_start;
 	}
 
 	*fd = -1;
 	*counter = 0;
+	*sm = NULL;
 	req->cb = cb;
 	queue_insert_tail(&uv->prepare_reqs, &req->queue);
 

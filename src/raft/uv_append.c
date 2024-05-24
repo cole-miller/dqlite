@@ -58,6 +58,7 @@ struct uvAliveSegment
 	queue queue;                    /* Segment queue */
 	struct UvBarrier *barrier;      /* Barrier waiting on this segment */
 	bool finalize;                  /* Finalize the segment after writing */
+	struct sm *sm;
 };
 
 struct uvAppend
@@ -432,6 +433,7 @@ err:
 static int uvAliveSegmentReady(struct uv *uv,
 			       uv_file fd,
 			       uvCounter counter,
+			       struct sm *sm,
 			       struct uvAliveSegment *segment)
 {
 	int rv;
@@ -443,6 +445,8 @@ static int uvAliveSegmentReady(struct uv *uv,
 		return rv;
 	}
 	segment->counter = counter;
+	segment->sm = sm;
+	sm_move(segment->sm, SEG_ALIVE);
 	return 0;
 }
 
@@ -478,7 +482,7 @@ static void uvAliveSegmentPrepareCb(struct uvPrepare *req, int status)
 	 * requests. */
 	assert(!queue_empty(&uv->append_pending_reqs));
 
-	rv = uvAliveSegmentReady(uv, req->fd, req->counter, segment);
+	rv = uvAliveSegmentReady(uv, req->fd, req->counter, req->sm, segment);
 	if (rv != 0) {
 		tracef("prepare segment ready failed (%d)", rv);
 		goto err;
@@ -526,6 +530,7 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 	struct uvAliveSegment *segment;
 	uv_file fd;
 	uvCounter counter;
+	struct sm *sm;
 	int rv;
 
 	segment = RaftHeapMalloc(sizeof *segment);
@@ -537,7 +542,7 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 
 	queue_insert_tail(&uv->append_segments, &segment->queue);
 
-	rv = UvPrepare(uv, &fd, &counter, &segment->prepare,
+	rv = UvPrepare(uv, &fd, &counter, &sm, &segment->prepare,
 		       uvAliveSegmentPrepareCb);
 	if (rv != 0) {
 		goto err_after_alloc;
@@ -546,7 +551,7 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 	/* If we've been returned a ready prepared segment right away, start
 	 * writing to it immediately. */
 	if (fd != -1) {
-		rv = uvAliveSegmentReady(uv, fd, counter, segment);
+		rv = uvAliveSegmentReady(uv, fd, counter, sm, segment);
 		if (rv != 0) {
 			goto err_after_prepare;
 		}

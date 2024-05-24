@@ -7,6 +7,7 @@
 #include "../tracing.h"
 #include "err.h"
 #include "../lib/queue.h"
+#include "../lib/sm.h"
 #include "uv_fs.h"
 #include "uv_os.h"
 
@@ -301,6 +302,7 @@ struct uvPrepare
 	void *data;                 /* User data */
 	uv_file fd;                 /* Resulting segment file descriptor */
 	unsigned long long counter; /* Resulting segment counter */
+	struct sm *sm;
 	uvPrepareCb cb;             /* Completion callback */
 	queue queue;                /* Links in uv_io->prepare_reqs */
 };
@@ -313,6 +315,7 @@ struct uvPrepare
 int UvPrepare(struct uv *uv,
 	      uv_file *fd,
 	      uvCounter *counter,
+	      struct sm **sm,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb);
 
@@ -418,5 +421,12 @@ int UvRecvStart(struct uv *uv);
 void UvRecvClose(struct uv *uv);
 
 void uvMaybeFireCloseCb(struct uv *uv);
+
+enum {
+	SEG_IDLE,
+	SEG_PREPARED,
+	SEG_ALIVE,
+	SEG_NSTATES
+};
 
 #endif /* UV_H_ */
