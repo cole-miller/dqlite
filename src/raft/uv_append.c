@@ -58,7 +58,7 @@ struct uvAliveSegment
 	queue queue;                    /* Segment queue */
 	struct UvBarrier *barrier;      /* Barrier waiting on this segment */
 	bool finalize;                  /* Finalize the segment after writing */
-	struct sm *sm;
+	struct sm sm;
 };
 
 struct uvAppend
@@ -206,6 +206,8 @@ static void uvAliveSegmentWriteCb(struct UvWriterReq *write, const int status)
 		uv->errored = true;
 		goto out;
 	}
+
+	sm_move(&s->sm, SEG_WRITTEN);
 
 	s->written = s->next_block * uv->block_size + s->pending.n;
 	s->last_index = s->pending_last_index;
@@ -433,7 +435,7 @@ err:
 static int uvAliveSegmentReady(struct uv *uv,
 			       uv_file fd,
 			       uvCounter counter,
-			       struct sm *sm,
+			       struct sm sm,
 			       struct uvAliveSegment *segment)
 {
 	int rv;
@@ -446,7 +448,7 @@ static int uvAliveSegmentReady(struct uv *uv,
 	}
 	segment->counter = counter;
 	segment->sm = sm;
-	sm_move(segment->sm, SEG_ALIVE);
+	sm_move(&segment->sm, SEG_ALIVE);
 	return 0;
 }
 
@@ -530,7 +532,7 @@ static int uvAppendPushAliveSegment(struct uv *uv)
 	struct uvAliveSegment *segment;
 	uv_file fd;
 	uvCounter counter;
-	struct sm *sm;
+	struct sm sm;
 	int rv;
 
 	segment = RaftHeapMalloc(sizeof *segment);

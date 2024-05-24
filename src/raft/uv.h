@@ -302,7 +302,7 @@ struct uvPrepare
 	void *data;                 /* User data */
 	uv_file fd;                 /* Resulting segment file descriptor */
 	unsigned long long counter; /* Resulting segment counter */
-	struct sm *sm;
+	struct sm sm;
 	uvPrepareCb cb;             /* Completion callback */
 	queue queue;                /* Links in uv_io->prepare_reqs */
 };
@@ -315,7 +315,7 @@ struct uvPrepare
 int UvPrepare(struct uv *uv,
 	      uv_file *fd,
 	      uvCounter *counter,
-	      struct sm **sm,
+	      struct sm *sm,
 	      struct uvPrepare *req,
 	      uvPrepareCb cb);
 
@@ -426,6 +426,7 @@ enum {
 	SEG_IDLE,
 	SEG_PREPARED,
 	SEG_ALIVE,
+	SEG_WRITTEN,
 	SEG_NSTATES
 };
 
