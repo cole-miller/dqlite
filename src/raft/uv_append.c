@@ -207,8 +207,6 @@ static void uvAliveSegmentWriteCb(struct UvWriterReq *write, const int status)
 		goto out;
 	}
 
-	sm_move(&s->sm, SEG_WRITTEN);
-
 	s->written = s->next_block * uv->block_size + s->pending.n;
 	s->last_index = s->pending_last_index;
 
@@ -280,7 +278,6 @@ out:
 		 * it's too bug-prone. */
 		s->pending_last_index = s->last_index;
 		s->finalize = true;
-		sm_move(&s->sm, SEG_PREFINALIZE);
 	}
 
 	/* During the closing sequence we should have already canceled all
@@ -639,7 +636,6 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 		if (!fits) {
 			segment->finalize =
 			    true; /* Finalize when all writes are done */
-			sm_move(&segment->sm, SEG_PREFINALIZE);
 		}
 	}
 
@@ -774,7 +770,6 @@ static void uvFinalizeCurrentAliveSegmentOnceIdle(struct uv *uv)
 		uvAliveSegmentFinalize(s);
 	} else {
 		s->finalize = true;
-		sm_move(&s->sm, SEG_PREFINALIZE);
 	}
 }
 
@@ -878,7 +873,6 @@ int UvBarrier(struct uv *uv, raft_index next_index, struct UvBarrierReq *req)
 			continue;
 		}
 		segment->finalize = true;
-		sm_move(&segment->sm, SEG_PREFINALIZE);
 	}
 
 	/* Unable to attach to a segment, because all segments are involved in a

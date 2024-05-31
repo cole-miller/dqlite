@@ -19,18 +19,8 @@ static struct sm_conf seg_states[SEG_NSTATES] = {
 	},
 	[SEG_ALIVE] = {
 		.flags = 0,
-		.allowed = BITS(SEG_WRITTEN),
-		.name = "alive"
-	},
-	[SEG_WRITTEN] = {
-		.flags = 0,
-		.allowed = BITS(SEG_WRITTEN)|BITS(SEG_PREFINALIZE),
-		.name = "written"
-	},
-	[SEG_PREFINALIZE] = {
-		.flags = 0,
 		.allowed = 0,
-		.name = "prefinalize"
+		.name = "alive"
 	}
 };
 
