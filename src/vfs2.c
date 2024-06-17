@@ -1617,7 +1617,7 @@ int vfs2_commit_barrier(sqlite3_file *file)
 		sqlite3_file *wal_cur = e->wal_cur;
 		struct wal_frame_hdr fhdr;
 		int rv = wal_cur->pMethods->xRead(wal_cur, &fhdr, sizeof(fhdr), wal_offset_from_cursor(e->page_size, e->wal_cursor - 1));
-		if (rv == SQLITE_OK) {
+		if (rv != SQLITE_OK) {
 			return rv;
 		}
 		set_mx_frame(get_full_hdr(e), e->wal_cursor, fhdr);
