@@ -841,14 +841,7 @@ static int dqliteDatabaseDirSetup(dqlite_node *t)
 		return rv;
 	}
 
-	rv = FsRemoveDirFiles(t->config.dir);
-	if (rv != 0) {
-		snprintf(t->errmsg, DQLITE_ERRMSG_BUF_SIZE,
-			 "Error removing files in database dir: %d", rv);
-		return rv;
-	}
-
-	return rv;
+	return 0;
 }
 
 int dqlite_node_start(dqlite_node *t)
