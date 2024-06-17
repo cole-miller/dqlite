@@ -618,13 +618,13 @@ static int vfs2_close(sqlite3_file *file)
 		}
 		sqlite3_free(xfile->orig);
 		if (xfile->entry != NULL) {
+			PRE(xfile->entry->refcount_main_db > 0);
 			xfile->entry->refcount_main_db -= 1;
-			maybe_close_entry(xfile->entry);
 		}
 	} else if (xfile->flags & SQLITE_OPEN_WAL) {
 		PRE(xfile->entry != NULL);
+		PRE(xfile->entry->refcount_wal > 0);
 		xfile->entry->refcount_wal -= 1;
-		maybe_close_entry(xfile->entry);
 	} else if (xfile->orig->pMethods != NULL) {
 		rv = xfile->orig->pMethods->xClose(xfile->orig);
 		sqlite3_free(xfile->orig);
@@ -1701,6 +1701,8 @@ int vfs2_poll(sqlite3_file *file, dqlite_vfs_frame **frames, unsigned *n, struct
 
 void vfs2_destroy(sqlite3_vfs *vfs)
 {
+	/* TODO(cole) close all outstanding entries */
+	(void)maybe_close_entry;
 	struct common *data = vfs->pAppData;
 	pthread_rwlock_destroy(&data->rwlock);
 	sqlite3_free(data);
