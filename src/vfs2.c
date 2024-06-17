@@ -1666,7 +1666,11 @@ int vfs2_poll(sqlite3_file *file, dqlite_vfs_frame **frames, unsigned *n, struct
 		sl->len = len;
 	}
 
-	sm_move(&xfile->entry->wtx_sm, WTX_POLLED);
+	/* FIXME(cole) need some additional tracking for ongoing
+	 * txn after standalone BEGIN? */
+	if (len > 0) {
+		sm_move(&xfile->entry->wtx_sm, WTX_POLLED);
+	}
 
 	return 0;
 }
