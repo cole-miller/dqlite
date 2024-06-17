@@ -48,7 +48,7 @@ int db__init(struct db *db, struct config *config, const char *filename)
 		goto err_after_filename_alloc;
 	}
 	if (db->config->disk) {
-		rv = snprintf(db->path, MAX_PATHNAME + 1, "%s/database/%s",
+		rv = snprintf(db->path, MAX_PATHNAME + 1, "%s/%s",
 			      db->config->dir, db->filename);
 	} else {
 		rv = snprintf(db->path, MAX_PATHNAME + 1, "%s", db->filename);
