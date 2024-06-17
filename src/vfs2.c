@@ -50,6 +50,7 @@ enum {
 	WTX_FOLLOWING,
 	/* Non-leader, all transactions in WAL-cur are committed (but at least one is not checkpointed). */
 	WTX_FLUSH,
+	WTX_INVALIDATED,
 	/* Leader, all transactions in WAL-cur are committed (but at least one is not checkpointed). */
 	WTX_BASE,
 	/* Leader, transaction in progress. */
@@ -116,12 +117,17 @@ static const struct sm_conf wtx_states[SM_STATES_MAX] = {
 	[WTX_FOLLOWING] = {
 		.flags = 0,
 		.name = "following",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_INVALIDATED)|BITS(WTX_CLOSED),
 	},
 	[WTX_FLUSH] = {
 		.flags = 0,
 		.name = "flush",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_ACTIVE)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_INVALIDATED)|BITS(WTX_CLOSED),
+	},
+	[WTX_INVALIDATED] = {
+		.flags = 0,
+		.name = "invalidated",
+		.allowed = BITS(WTX_ACTIVE)|BITS(WTX_CLOSED),
 	},
 	[WTX_BASE] = {
 		.flags = 0,
@@ -435,8 +441,11 @@ static bool is_open(const struct entry *e)
 
 static bool basic_hdr_valid(struct wal_index_basic_hdr bhdr)
 {
+
 	struct cksums sums = {};
-	update_cksums(bhdr.bigEndCksum ? BE_MAGIC : LE_MAGIC, (uint8_t *)&bhdr, offsetof(struct wal_index_basic_hdr, cksums), &sums);
+	uint32_t magic = bhdr.bigEndCksum ? BE_MAGIC : LE_MAGIC;
+	size_t n = offsetof(struct wal_index_basic_hdr, cksums);
+	update_cksums(magic, (uint8_t *)&bhdr, n, &sums);
 	return bhdr.iVersion == 3007000
 		&& bhdr.isInit == 1
 		&& cksums_equal(sums, bhdr.cksums);
@@ -444,7 +453,8 @@ static bool basic_hdr_valid(struct wal_index_basic_hdr bhdr)
 
 static bool full_hdr_valid(const struct wal_index_full_hdr *ihdr)
 {
-	return basic_hdr_valid(ihdr->basic[0]) && wal_index_basic_hdr_equal(ihdr->basic[0], ihdr->basic[1]);
+	return basic_hdr_valid(ihdr->basic[0]) &&
+		wal_index_basic_hdr_equal(ihdr->basic[0], ihdr->basic[1]);
 }
 
 static bool wtx_invariant(const struct sm *sm, int prev)
@@ -465,7 +475,15 @@ static bool wtx_invariant(const struct sm *sm, int prev)
 	if (!CHECK(is_open(e))) {
 		return false;
 	}
+
 	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
+	/* TODO(cole) fill this out */
+	if (sm_state(sm) == WTX_INVALIDATED) {
+		if (!CHECK(!full_hdr_valid(ihdr))) {
+			return false;
+		}
+		return true;
+	}
 	if (!CHECK(full_hdr_valid(ihdr))) {
 		return false;
 	}
@@ -1322,12 +1340,15 @@ static int open_entry(struct common *common, const char *name, struct entry *e)
 
 	*get_full_hdr(e) = initial_full_hdr(hdr_cur);
 
-	e->wal_cursor = wal_cursor_from_size(e->page_size, size_cur);
-
+	/* If WAL-cur is empty, we need to defer computing the page
+	 * size. */
 	int next = WTX_EMPTY;
+	/* TODO verify the header here */
 	if (size_cur >= wal_offset_from_cursor(0 /* this doesn't matter */, 0)) {
-		/* TODO verify the header here */
+		/* This is guaranteed to be correct since we don't
+		 * support changing the page size dynamically. */
 		e->page_size = ByteGetBe32(hdr_cur.page_size);
+		e->wal_cursor = wal_cursor_from_size(e->page_size, size_cur);
 		next = WTX_FLUSH;
 	}
 	if (size_cur >= wal_offset_from_cursor(e->page_size, 1)) {
@@ -1616,7 +1637,10 @@ int vfs2_commit_barrier(sqlite3_file *file)
 	if (e->wal_cursor > 0) {
 		sqlite3_file *wal_cur = e->wal_cur;
 		struct wal_frame_hdr fhdr;
-		int rv = wal_cur->pMethods->xRead(wal_cur, &fhdr, sizeof(fhdr), wal_offset_from_cursor(e->page_size, e->wal_cursor - 1));
+		/* FIXME(cole) */
+		PRE(e->wal_cursor > 0);
+		sqlite3_int64 off = wal_offset_from_cursor(e->page_size, e->wal_cursor - 1);
+		int rv = wal_cur->pMethods->xRead(wal_cur, &fhdr, sizeof(fhdr), off);
 		if (rv != SQLITE_OK) {
 			return rv;
 		}
@@ -1625,7 +1649,7 @@ int vfs2_commit_barrier(sqlite3_file *file)
 		e->shm_locks[WAL_WRITE_LOCK] = 0;
 		get_full_hdr(e)->basic[0].isInit = 0;
 		/* The next transaction will cause SQLite to run recovery which will complete the transition to BASE */
-		sm_move(&e->wtx_sm, WTX_FLUSH);
+		sm_move(&e->wtx_sm, WTX_INVALIDATED);
 	}
 	return 0;
 }
