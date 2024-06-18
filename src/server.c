@@ -64,17 +64,14 @@ static void initial_barrier_cb(struct raft *r)
 	queue *head;
 	QUEUE_FOREACH(head, &d->registry.dbs) {
 		struct db *db = QUEUE_DATA(head, struct db, queue);
-		PRE(db->follower == NULL);
-		rv = db__open_follower(db);
+		sqlite3 *conn;
+		int flags = SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE;
+		rv = sqlite3_open_v2(db->path, &conn, flags, db->config->name);
 		UNHANDLED(rv != SQLITE_OK);
-		POST(db->follower != NULL);
-
-		sqlite3_file *fp = main_file(db->follower);
+		sqlite3_file *fp = main_file(conn);
 		rv = vfs2_commit_barrier(fp);
 		UNHANDLED(rv != 0);
-
-		sqlite3_close(db->follower);
-		db->follower = NULL;
+		sqlite3_close(conn);
 	}
 }
 

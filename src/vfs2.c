@@ -578,34 +578,6 @@ static sqlite3_file *get_orig(struct file *f)
 	return (f->flags & SQLITE_OPEN_WAL) ? f->entry->wal_cur : f->orig;
 }
 
-static void maybe_close_entry(struct entry *e)
-{
-	if (e->refcount_main_db > 0 || e->refcount_wal > 0) {
-		return;
-	}
-
-	sqlite3_free(e->main_db_name);
-	sqlite3_free(e->wal_moving_name);
-	sqlite3_free(e->wal_cur_fixed_name);
-	if (e->wal_cur->pMethods != NULL) {
-		e->wal_cur->pMethods->xClose(e->wal_cur);
-	}
-	sqlite3_free(e->wal_cur);
-	sqlite3_free(e->wal_prev_fixed_name);
-	if (e->wal_prev->pMethods != NULL) {
-		e->wal_prev->pMethods->xClose(e->wal_prev);
-	}
-	sqlite3_free(e->wal_prev);
-
-	free_pending_txn(e);
-
-	pthread_rwlock_wrlock(&e->common->rwlock);
-	queue_remove(&e->link);
-	pthread_rwlock_unlock(&e->common->rwlock);
-	sqlite3_free(e);
-
-}
-
 static int vfs2_close(sqlite3_file *file)
 {
 	struct file *xfile = (struct file *)file;
@@ -1701,9 +1673,33 @@ int vfs2_poll(sqlite3_file *file, dqlite_vfs_frame **frames, unsigned *n, struct
 
 void vfs2_destroy(sqlite3_vfs *vfs)
 {
-	/* TODO(cole) close all outstanding entries */
-	(void)maybe_close_entry;
 	struct common *data = vfs->pAppData;
+	queue *head = &data->queue;
+	queue *cur = queue_next(head);
+	while (cur != head) {
+		queue *next = queue_next(cur);
+		struct entry *e = QUEUE_DATA(cur, struct entry, link);
+		PRE(e->refcount_main_db == 0);
+		PRE(e->refcount_wal == 0);
+
+		sqlite3_free(e->main_db_name);
+		sqlite3_free(e->wal_moving_name);
+		sqlite3_free(e->wal_cur_fixed_name);
+		if (e->wal_cur->pMethods != NULL) {
+			e->wal_cur->pMethods->xClose(e->wal_cur);
+		}
+		sqlite3_free(e->wal_cur);
+		sqlite3_free(e->wal_prev_fixed_name);
+		if (e->wal_prev->pMethods != NULL) {
+			e->wal_prev->pMethods->xClose(e->wal_prev);
+		}
+		sqlite3_free(e->wal_prev);
+
+		free_pending_txn(e);
+
+		sqlite3_free(e);
+		cur = next;
+	}
 	pthread_rwlock_destroy(&data->rwlock);
 	sqlite3_free(data);
 	sqlite3_free(vfs);
