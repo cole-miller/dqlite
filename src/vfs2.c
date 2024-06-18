@@ -1840,10 +1840,11 @@ static struct wal_hdr next_wal_hdr(const struct entry *e)
        	if (ckpoint_seqno == 0) {
 		salt1 = get_salt1(old.salts) + 1;
 	} else {
-		e->common->orig->xRandomness(e->common->orig, sizeof(salt1), (void *)&salt1);
+		/* TODO(cole) explain this */
+		sqlite3_randomness(sizeof(salt1), (void *)&salt1);
 	}
 	BytePutBe32(salt1, ret.salts.salt1);
-	e->common->orig->xRandomness(e->common->orig, sizeof(ret.salts.salt2), (void *)&ret.salts.salt2);
+	sqlite3_randomness(sizeof(ret.salts.salt1), (void *)&ret.salts.salt2);
 	return ret;
 }
 
