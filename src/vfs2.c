@@ -1697,6 +1697,12 @@ void vfs2_destroy(sqlite3_vfs *vfs)
 
 		free_pending_txn(e);
 
+		PRE(e->shm_refcount == 0);
+		for (int i = 0; i < e->shm_regions_len; i++) {
+			sqlite3_free(e->shm_regions[i]);
+		}
+		sqlite3_free(e->shm_regions);
+
 		sqlite3_free(e);
 		cur = next;
 	}
