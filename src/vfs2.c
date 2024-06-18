@@ -1873,6 +1873,10 @@ int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size, const dqlite_
 	struct file *xfile = (struct file *)file;
 	PRE(xfile->flags & SQLITE_OPEN_MAIN_DB);
 	struct entry *e = xfile->entry;
+	/* XXX(cole) */
+	if (e->page_size == 0) {
+		e->page_size = page_size;
+	}
 	PRE(page_size == e->page_size);
 	int rv;
 
