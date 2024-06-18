@@ -848,6 +848,8 @@ int dqlite_node_start(dqlite_node *t)
 {
 	int rv;
 
+	PRE(!t->running);
+
 	dqliteTracingMaybeEnable(true);
 	tracef("dqlite node start");
 
