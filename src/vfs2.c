@@ -1054,11 +1054,11 @@ static void vfs2_shm_barrier(sqlite3_file *file)
 
 static int vfs2_shm_unmap(sqlite3_file *file, int delete)
 {
-	(void)delete;
 	struct file *xfile = (struct file *)file;
 	struct entry *e = xfile->entry;
+	tracef("UNMAP %p", e);
 	e->shm_refcount--;
-	if (e->shm_refcount == 0) {
+	if (e->shm_refcount == 0 && delete) {
 		for (int i = 0; i < e->shm_regions_len; i++) {
 			void *region = e->shm_regions[i];
 			assert(region != NULL);
@@ -1217,17 +1217,14 @@ static int open_entry(struct common *common, const char *name, struct entry *e)
 
 	strcpy(e->main_db_name, name);
 
-	strcpy(e->wal_moving_name, name);
-	strcat(e->wal_moving_name, "-wal");
-
-	strcpy(e->wal_cur_fixed_name, name);
-	strcat(e->wal_cur_fixed_name, "-xwal1");
-
-	strcpy(e->wal_prev_fixed_name, name);
-	strcat(e->wal_prev_fixed_name, "-xwal2");
+	size_t pc = (size_t)path_cap;
+	snprintf(e->wal_moving_name, pc, "%s-wal", name);
+	snprintf(e->wal_cur_fixed_name, pc, "%s-xwal1", name);
+	snprintf(e->wal_prev_fixed_name, pc, "%s-xwal2", name);
 
 	/* TODO EXRESCODE? */
-	int phys_wal_flags = SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_WAL|SQLITE_OPEN_NOFOLLOW;
+	int phys_wal_flags = SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|
+		SQLITE_OPEN_WAL|SQLITE_OPEN_NOFOLLOW;
 
 	e->wal_cur = sqlite3_malloc(file_cap);
 	if (e->wal_cur == NULL) {
@@ -1309,11 +1306,12 @@ static int open_entry(struct common *common, const char *name, struct entry *e)
 	}
 	memset(e->shm_regions[0], 0, VFS2_WAL_INDEX_REGION_SIZE);
 	e->shm_regions_len = 1;
+	tracef("REGIONS %p", e);
 
 	*get_full_hdr(e) = initial_full_hdr(hdr_cur);
 
-	/* If WAL-cur is empty, we need to defer computing the page
-	 * size. */
+	/* TODO(cole) implement deferred initialization of page size when
+	 * WAL-cur is empty at startup. */
 	int next = WTX_EMPTY;
 	/* TODO verify the header here */
 	if (size_cur >= wal_offset_from_cursor(0 /* this doesn't matter */, 0)) {
@@ -1606,6 +1604,8 @@ int vfs2_commit_barrier(sqlite3_file *file)
 	struct file *xfile = (struct file *)file;
 	PRE(xfile->flags & SQLITE_OPEN_MAIN_DB);
 	struct entry *e = xfile->entry;
+	tracef("BARRIER %p", e);
+	PRE(e->shm_regions_len > 0);
 	if (e->wal_cursor > 0) {
 		sqlite3_file *wal_cur = e->wal_cur;
 		struct wal_frame_hdr fhdr;

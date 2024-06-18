@@ -133,6 +133,7 @@ int leader__init(struct leader *l, struct db *db, struct raft *raft)
 	int rc;
 	l->db = db;
 	l->raft = raft;
+	/* FIXME(cole) we shouldn't open this connection yet */
 	rc = openConnection(db->path, db->config->name, db->config->page_size,
 			    &l->conn);
 	if (rc != 0) {
