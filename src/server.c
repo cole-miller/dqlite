@@ -729,12 +729,8 @@ static int taskRun(struct dqlite_node *d)
 		goto err;
 	}
 
-	/* FIXME(cole) */
-	// rv = uv_run(&d->loop, UV_RUN_DEFAULT);
-	// assert(rv == 0);
-	while (uv_run(&d->loop, UV_RUN_ONCE) > 0) {
-		uv_print_active_handles(&d->loop, stderr);
-	}
+	rv = uv_run(&d->loop, UV_RUN_DEFAULT);
+	assert(rv == 0);
 
 	/* Unblock any client of taskReady */
 	rv = sem_post(&d->ready);
