@@ -1837,14 +1837,18 @@ static struct wal_hdr next_wal_hdr(const struct entry *e)
 	uint32_t ckpoint_seqno = ByteGetBe32(old.ckpoint_seqno);
 	BytePutBe32(ckpoint_seqno + 1, ret.ckpoint_seqno);
 	uint32_t salt1;
+	/* TODO(cole) explain sqlite3_randomness here */
        	if (ckpoint_seqno == 0) {
 		salt1 = get_salt1(old.salts) + 1;
 	} else {
-		/* TODO(cole) explain this */
 		sqlite3_randomness(sizeof(salt1), (void *)&salt1);
 	}
 	BytePutBe32(salt1, ret.salts.salt1);
 	sqlite3_randomness(sizeof(ret.salts.salt1), (void *)&ret.salts.salt2);
+	struct cksums sums = {};
+	update_cksums(native_magic(), (void *)&ret, 24, &sums);
+	BytePutBe32(sums.cksum1, ret.cksum1);
+	BytePutBe32(sums.cksum2, ret.cksum2);
 	return ret;
 }
 
