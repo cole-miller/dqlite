@@ -1024,8 +1024,8 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 			 * transaction. */
 			assert(n == 1);
 			tracef("unlocking write lock");
-			/* TODO make sure this is correct */
-			if (e->pending_txn_last_frame_commit == 0) {
+			/* FIXME(cole) iron this out */
+			if (sm_state(&e->wtx_sm) >= WTX_BASE && e->pending_txn_last_frame_commit == 0) {
 				free_pending_txn(e);
 				sm_move(&e->wtx_sm, WTX_BASE);
 			}
