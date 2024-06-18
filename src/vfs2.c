@@ -1895,7 +1895,8 @@ int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size, const dqlite_
 	
 	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
 	uint32_t mx = ihdr->basic[0].mxFrame;
-	if (mx > 0 && ihdr->nBackfill == mx) {
+	/* TODO(cole) understand the behavior when mx == 0 */
+	if (/* mx > 0 && */ ihdr->nBackfill == mx) {
 		struct wal_hdr new_whdr = next_wal_hdr(e);
 		restart_full_hdr(ihdr, new_whdr);
 		rv = wal_swap(e, &new_whdr);
