@@ -121,6 +121,25 @@ static int node_outer_init(struct dqlite_node *d,
 		goto err_after_raft_proxy_init;
 	}
 
+	rv = raft_init(&d->raft, &d->raft_io, &d->raft_fsm, d->config.id, d->config.address);
+	if (rv != 0) {
+		snprintf(d->errmsg, sizeof(d->errmsg), "raft_init: %s", raft_errmsg(&d->raft));
+		goto err_after_raft_uv_init;
+	}
+
+	/* TODO: expose these values through some API */
+	raft_set_election_timeout(&d->raft, 3000);
+	raft_set_heartbeat_timeout(&d->raft, 500);
+	raft_set_snapshot_threshold(&d->raft, 1024);
+	raft_set_snapshot_trailing(&d->raft, 8192);
+	raft_set_pre_vote(&d->raft, true);
+	raft_set_max_catch_up_rounds(&d->raft, 100);
+	raft_set_max_catch_up_round_duration(&d->raft, 50 * 1000); /* 50 secs */
+	raft_register_state_cb(&d->raft, state_cb);
+#ifndef USE_SYSTEM_RAFT
+	raft_register_initial_barrier_cb(&d->raft, initial_barrier_cb);
+#endif
+
 	rv = sem_init(&d->ready, 0, 0);
 	assert(rv == 0);
 	rv = sem_init(&d->stopped, 0, 0);
@@ -130,6 +149,8 @@ static int node_outer_init(struct dqlite_node *d,
 
 	return 0;
 
+err_after_raft_uv_init:
+	raft_uv_close(&d->raft_io);
 err_after_raft_proxy_init:
 	raftProxyClose(&d->raft_transport);
 err_after_loop_init:
@@ -144,13 +165,18 @@ err:
 static void node_outer_fini(struct dqlite_node *d)
 {
 	PRE(d != NULL);
+	int rv;
 
 	sem_destroy(&d->handover_done);
 	sem_destroy(&d->stopped);
 	sem_destroy(&d->ready);
+#ifndef USE_SYSTEM_RAFT
+	raft_fini(&d->raft);
+#endif
 	raft_uv_close(&d->raft_io);
 	raftProxyClose(&d->raft_transport);
-	uv_loop_close(&d->loop);
+	rv = uv_loop_close(&d->loop);
+	assert(rv == 0);
 	registry__close(&d->registry);
 	config__close(&d->config);
 	sqlite3_free(d->bind_address);
@@ -186,30 +212,17 @@ static int node_inner_init(struct dqlite_node *d)
 	}
 	sqlite3_vfs_register(vfs, 0 /* not default */);
 
-	rv = raft_init(&d->raft, &d->raft_io, &d->raft_fsm, d->config.id, d->config.address);
-	if (rv != 0) {
-		snprintf(d->errmsg, sizeof(d->errmsg), "raft_init: %s", raft_errmsg(&d->raft));
-		goto err_after_vfs_register;
+	if (d->disk_mode) {
+		rv = pool_init(&d->pool, &d->loop, d->config.pool_thread_count, POOL_QOS_PRIO_FAIR);
+		if (rv != 0) {
+			goto err_after_vfs_register;
+		}
 	}
-
-	/* TODO: expose these values through some API */
-	raft_set_election_timeout(&d->raft, 3000);
-	raft_set_heartbeat_timeout(&d->raft, 500);
-	raft_set_snapshot_threshold(&d->raft, 1024);
-	raft_set_snapshot_trailing(&d->raft, 8192);
-	raft_set_pre_vote(&d->raft, true);
-	raft_set_max_catch_up_rounds(&d->raft, 100);
-	raft_set_max_catch_up_round_duration(&d->raft, 50 * 1000); /* 50 secs */
-	raft_register_state_cb(&d->raft, state_cb);
-#ifndef USE_SYSTEM_RAFT
-	raft_register_initial_barrier_cb(&d->raft, initial_barrier_cb);
-#endif
 
 	return 0;
 
 err_after_vfs_register:
 	sqlite3_vfs_unregister(vfs);
-	fsm__close(&d->raft_fsm);
 err_after_vfs_create:
 	if (d->disk_mode) {
 		vfs2_destroy(vfs);
@@ -431,18 +444,11 @@ int dqlite_node_set_block_size(dqlite_node *n, size_t size)
 
 int dqlite_node_enable_disk_mode(dqlite_node *n)
 {
-	int rv;
-
 	if (n->running) {
 		return DQLITE_MISUSE;
 	}
 
 	config_set_disk_mode(&n->config);
-
-	rv = pool_init(&n->pool, &n->loop, n->config.pool_thread_count, POOL_QOS_PRIO_FAIR);
-	if (rv != 0) {
-		return DQLITE_ERROR;
-	}
 
 #ifndef USE_SYSTEM_RAFT
 	raft_uv_set_format_version(&n->raft_io, 2);
@@ -1796,6 +1802,8 @@ int dqlite_server_stop(dqlite_server *server)
 	if (rv != 0) {
 		return 1;
 	}
+	dqlite_node_destroy(server->local);
+	server->local = NULL;
 	return 0;
 }
 
@@ -1807,9 +1815,6 @@ void dqlite_server_destroy(dqlite_server *server)
 	emptyCache(&server->cache);
 
 	free(server->dir_path);
-	if (server->local != NULL) {
-		dqlite_node_destroy(server->local);
-	}
 	free(server->local_addr);
 	free(server->bind_addr);
 	close(server->dir_fd);

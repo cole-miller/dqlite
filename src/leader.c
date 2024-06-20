@@ -129,7 +129,7 @@ static bool needsBarrier(struct leader *l)
 
 int leader__init(struct leader *l, struct db *db, struct raft *raft)
 {
-	tracef("leader init");
+	tracef("leader init id:%llu", raft->id);
 	int rc;
 	l->db = db;
 	l->raft = raft;

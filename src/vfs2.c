@@ -756,7 +756,7 @@ static int vfs2_write(sqlite3_file *file,
 		assert(amt == sizeof(struct wal_hdr));
 		const struct wal_hdr *hdr = buf;
 		struct entry *e = xfile->entry;
-		tracef("about to wal swap");
+		tracef("WAL SWAP LEADER");
 		rv = wal_swap(e, hdr);
 		if (rv != SQLITE_OK) {
 			return rv;
@@ -978,6 +978,13 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 
 	assert(xfile->flags & SQLITE_OPEN_MAIN_DB);
 
+	if (flags == (SQLITE_SHM_LOCK | SQLITE_SHM_EXCLUSIVE) &&
+		ofst <= WAL_RECOVER_LOCK && WAL_RECOVER_LOCK < ofst + n)
+	{
+		struct wal_index_basic_hdr bh = get_full_hdr(e)->basic[0];
+		tracef("RECOVERY isInit=%u mxFrame=%u", bh.isInit, bh.mxFrame);
+	}
+
 	if (flags == (SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)) {
 		for (int i = ofst; i < ofst + n; i++) {
 			if (e->shm_locks[i] == VFS2_EXCLUSIVE) {
@@ -1017,6 +1024,8 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 
 		if (ofst <= WAL_RECOVER_LOCK && WAL_RECOVER_LOCK < ofst + n) {
 			tracef("unlocking the recovery lock!");
+			struct wal_index_full_hdr *fh = get_full_hdr(e);
+			tracef("mxFrame after recovery is %u, cursor is %u, isInit is %u", fh->basic[0].mxFrame, e->wal_cursor, fh->basic[0].isInit);
 		}
 
 		if (ofst == WAL_WRITE_LOCK) {
@@ -1617,10 +1626,10 @@ int vfs2_commit_barrier(sqlite3_file *file)
 			return rv;
 		}
 		set_mx_frame(get_full_hdr(e), e->wal_cursor, fhdr);
-		/* It's okay if the write lock isn't held */
+		/* It's okay if the write lock isn't held. */
 		e->shm_locks[WAL_WRITE_LOCK] = 0;
 		get_full_hdr(e)->basic[0].isInit = 0;
-		/* The next transaction will cause SQLite to run recovery which will complete the transition to BASE */
+		/* The next transaction will cause SQLite to run recovery. */
 		sm_move(&e->wtx_sm, WTX_INVALIDATED);
 	}
 	return 0;
@@ -1824,6 +1833,7 @@ static int write_one_frame(struct entry *e, struct wal_frame_hdr hdr, void *data
 		return rv;
 	}
 	e->wal_cursor += 1;
+	tracef("wal_cursor=%u", e->wal_cursor);
 	return SQLITE_OK;
 }
 
@@ -1867,7 +1877,9 @@ static struct wal_frame_hdr txn_frame_hdr(struct entry *e, struct cksums sums, u
 	return fhdr;
 }
 
-int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size, const dqlite_vfs_frame *frames, unsigned len, struct vfs2_wal_slice *out)
+int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size,
+		const dqlite_vfs_frame *frames, unsigned len,
+		struct vfs2_wal_slice *out)
 {
 	PRE(len > 0);
 	PRE(is_valid_page_size(page_size));
@@ -1893,7 +1905,7 @@ int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size, const dqlite_
 	 *
 	 * The write lock will be released when a call to vfs2_commit
 	 * or vfs2_unapply causes the number of committed frames in
-	 * WAL-cur (mxFrame) to equal the number of applies frames
+	 * WAL-cur (mxFrame) to equal the number of applied frames
 	 * (wal_cursor). */
 	e->shm_locks[WAL_WRITE_LOCK] = VFS2_EXCLUSIVE;
 	
@@ -1903,6 +1915,7 @@ int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size, const dqlite_
 	if (/* mx > 0 && */ ihdr->nBackfill == mx && mx == e->wal_cursor) {
 		struct wal_hdr new_whdr = next_wal_hdr(e);
 		restart_full_hdr(ihdr, new_whdr);
+		tracef("WAL SWAP mx=%u cksums=%u %u", mx, ByteGetBe32(new_whdr.cksum1), ByteGetBe32(new_whdr.cksum2));
 		rv = wal_swap(e, &new_whdr);
 		if (rv != SQLITE_OK) {
 			return 1;

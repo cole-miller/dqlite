@@ -974,10 +974,10 @@ struct change {
 
 static void raftChangeCb(struct raft_change *change, int status)
 {
-	tracef("raft change cb status:%d", status);
 	struct change *r = change->data;
 	struct gateway *g = r->gateway;
 	struct handle *req = g->req;
+	tracef("raft change cb id:%llu status:%d", g->raft->id, status);
 	struct response_empty response = { 0 };
 	g->req = NULL;
 	sqlite3_free(r);

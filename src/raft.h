@@ -935,6 +935,8 @@ RAFT_API int raft_init(struct raft *r,
 
 RAFT_API void raft_close(struct raft *r, raft_close_cb cb);
 
+RAFT_API void raft_fini(struct raft *r);
+
 /**
  * This function MUST be called after raft_init and before raft_start.
  * @cb will be called every time the raft state changes.

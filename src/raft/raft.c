@@ -117,11 +117,6 @@ static void ioCloseCb(struct raft_io *io)
 {
 	struct raft *r = io->data;
 	tracef("io close cb");
-	raftDestroyCallbacks(r);
-	raft_free(r->address);
-	logClose(r->log);
-	raft_configuration_close(&r->configuration);
-	raft_configuration_close(&r->configuration_last_snapshot);
 	if (r->close_cb != NULL) {
 		r->close_cb(r);
 	}
@@ -308,4 +303,13 @@ static int ioFsmVersionCheck(struct raft *r,
 	}
 
 	return 0;
+}
+
+void raft_fini(struct raft *r)
+{
+	raftDestroyCallbacks(r);
+	raft_free(r->address);
+	logClose(r->log);
+	raft_configuration_close(&r->configuration);
+	raft_configuration_close(&r->configuration_last_snapshot);
 }
