@@ -20,13 +20,13 @@
 #include <string.h>
 #include <unistd.h>
 
-#define VFS2_WAL_FIXED_SUFFIX1 "-xwal1"
-#define VFS2_WAL_FIXED_SUFFIX2 "-xwal2"
+#define WAL_FIXED_SUFFIX1 "-xwal1"
+#define WAL_FIXED_SUFFIX2 "-xwal2"
 
-#define VFS2_WAL_INDEX_REGION_SIZE (1 << 15)
-#define VFS2_WAL_FRAME_HDR_SIZE 24
+#define WAL_INDEX_REGION_SIZE (1 << 15)
+#define WAL_FRAME_HDR_SIZE 24
 
-#define VFS2_EXCLUSIVE UINT_MAX
+#define EXCLUSIVE UINT_MAX
 
 #define WAL_WRITE_LOCK 0
 #define WAL_CKPT_LOCK 1
@@ -42,112 +42,55 @@
 static const uint32_t invalid_magic = 0x17171717;
 
 enum {
-	/* Entry is not yet open. */
 	WTX_CLOSED,
-	/* Next WAL write will be a header write, causing a WAL swap (WAL-cur is empty or fully checkpointed). */
 	WTX_EMPTY,
-	/* Non-leader, at least one transaction in WAL-cur is not committed. */
-	WTX_FOLLOWING,
-	/* Non-leader, all transactions in WAL-cur are committed (but at least one is not checkpointed). */
-	WTX_FLUSH,
-	WTX_INVALIDATED,
-	/* Leader, all transactions in WAL-cur are committed (but at least one is not checkpointed). */
 	WTX_BASE,
-	/* Leader, transaction in progress. */
 	WTX_ACTIVE,
-	/* Leader, transaction committed by SQLite and hidden. */
 	WTX_HIDDEN,
-	/* Leader, transation committed by SQLite, hidden, and polled. */
-	WTX_POLLED
+	WTX_POLLED,
 };
-
-/*
-
-Diagram of the state machine (some transitions omitted when they would crowd the diagram even more):
-
-+----------------------+  sqlite3_open             +------------------------------------------------------------------------------+
-|        CLOSED        | ------------------------> |                                  FOLLOWING                                   | <+
-+----------------------+                           +------------------------------------------------------------------------------+  |
-  |                                                  ^                          ^                          |                         |
-  | sqlite3_open                                     | vfs2_apply_uncommitted   | vfs2_apply_uncommitted   | vfs2_{commit,unapply}   | vfs2_apply_uncommitted
-  v                                                  |                          |                          v                         |
-+----------------------------------------------------------------------------+  |                        +------------------------+  |
-|                                                                            |  +----------------------- |                        |  |
-|                                   EMPTY                                    |                           |         FLUSH          |  |
-|                                                                            | <------------------------ |                        |  |
-+----------------------------------------------------------------------------+   sqlite3_wal_checkpoint  +------------------------+  |
-  |                       ^                                                                                |                         |
-  | vfs2_commit_barrier   | sqlite3_wal_checkpoint                                                         |                         |
-  v                       |                                                                                |                         |
-+----------------------------------------------------------------------------+  vfs2_commit_barrier        |                         |
-|                                    BASE                                    | <---------------------------+                         |
-+----------------------------------------------------------------------------+                                                       |
-  |                       ^                          |                                                                               |
-  | sqlite3_step          | vfs2_unhide              +-------------------------------------------------------------------------------+
-  v                       |
-+----------------------+  |
-|        ACTIVE        |  |
-+----------------------+  |
-  |                       |
-  | COMMIT_PHASETWO       |
-  v                       |
-+----------------------+  |
-|        HIDDEN        |  |
-+----------------------+  |
-  |                       |
-  | vfs2_poll             |
-  v                       |
-+----------------------+  |
-|        POLLED        | -+
-+----------------------+
-
-*/
 
 static const struct sm_conf wtx_states[SM_STATES_MAX] = {
 	[WTX_CLOSED] = {
 		.flags = SM_INITIAL|SM_FINAL,
 		.name = "closed",
-		.allowed = BITS(WTX_EMPTY)|BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH),
+		.allowed = BITS(WTX_BASE)   /* hdr + zero frames in WAL-cur */
+			  |BITS(WTX_ACTIVE) /* hdr + some frames in WAL-cur */
+			  |BITS(WTX_EMPTY), /* nothing in WAL-cur */
 	},
 	[WTX_EMPTY] = {
 		.flags = 0,
 		.name = "empty",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_ACTIVE)|BITS(WTX_CLOSED),
-	},
-	[WTX_FOLLOWING] = {
-		.flags = 0,
-		.name = "following",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_INVALIDATED)|BITS(WTX_CLOSED),
-	},
-	[WTX_FLUSH] = {
-		.flags = 0,
-		.name = "flush",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_FLUSH)|BITS(WTX_INVALIDATED)|BITS(WTX_CLOSED),
-	},
-	[WTX_INVALIDATED] = {
-		.flags = 0,
-		.name = "invalidated",
-		.allowed = BITS(WTX_ACTIVE)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_ACTIVE)  /* write */
+			  |BITS(WTX_CLOSED),
 	},
 	[WTX_BASE] = {
 		.flags = 0,
 		.name = "base",
-		.allowed = BITS(WTX_FOLLOWING)|BITS(WTX_BASE)|BITS(WTX_ACTIVE)|BITS(WTX_EMPTY)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_CLOSED)
+			  |BITS(WTX_EMPTY)    /* full checkpoint */
+			  |BITS(WTX_ACTIVE),  /* write */
 	},
 	[WTX_ACTIVE] = {
 		.flags = 0,
 		.name = "active",
-		.allowed = BITS(WTX_BASE)|BITS(WTX_ACTIVE)|BITS(WTX_HIDDEN)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_BASE)   /* commit end */
+			  |BITS(WTX_ACTIVE) /* write, etc. */
+			  |BITS(WTX_HIDDEN) /* COMMIT_PHASETWO */
+			  |BITS(WTX_CLOSED),
 	},
 	[WTX_HIDDEN] = {
 		.flags = 0,
 		.name = "hidden",
-		.allowed = BITS(WTX_BASE)|BITS(WTX_POLLED)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_CLOSED)
+			  |BITS(WTX_POLLED) /* vfs2_poll */
+			  |BITS(WTX_BASE),  /* vfs2_abort */
 	},
 	[WTX_POLLED] = {
 		.flags = 0,
 		.name = "polled",
-		.allowed = BITS(WTX_BASE)|BITS(WTX_CLOSED),
+		.allowed = BITS(WTX_BASE) /* vfs2_abort, vfs2_commit */
+			  |BITS(WTX_CLOSED),
 	},
 };
 
@@ -244,12 +187,16 @@ struct wal_index_full_hdr {
 	uint8_t unused[4];
 };
 
+#define REGION0_PAGENOS 4062
+#define REGION0_HASHES 8192
+
 /**
  * View of the zeroth shm region, which contains the WAL index header.
  */
-union vfs2_shm_region0 {
+struct shm_region0 {
 	struct wal_index_full_hdr hdr;
-	char bytes[VFS2_WAL_INDEX_REGION_SIZE];
+	uint32_t pgnos[REGION0_PAGENOS];
+	uint16_t hashes[REGION0_HASHES];
 };
 
 struct entry {
@@ -291,7 +238,7 @@ struct entry {
 	/* For ACTIVE, HIDDEN, POLLED: the header that shows the pending txn */
 	struct wal_index_basic_hdr pending_txn_hdr;
 
-	/* shm implementation; holds the WAL index */
+	/* shm implementation; holds the WAL index. TODO: embedded struct? */
 	void **shm_regions;
 	int shm_regions_len;
 	unsigned shm_refcount;
@@ -299,14 +246,14 @@ struct entry {
 	unsigned shm_locks[SQLITE_SHM_NLOCK];
 
 	/* For ACTIVE, HIDDEN: the pending txn. start and len
-	 * are in units of frames. */
+	 * are in units of frames. TODO: embedded struct? */
 	dqlite_vfs_frame *pending_txn_frames;
 	uint32_t pending_txn_start;
 	uint32_t pending_txn_len;
 	uint32_t pending_txn_last_frame_commit;
 
-	/* Frame index, points to the physical end of WAL-cur */
-	uint32_t wal_cursor;
+	/* Frame index, points to the physical end of WAL-cur (or -1 if we need to write the header) */
+	sqlite3_int64 wal_cursor;
 	/* Cached header of WAL-cur */
 	struct wal_hdr wal_cur_hdr;
 	/* Cached header of WAL-prev */
@@ -341,7 +288,7 @@ static void free_pending_txn(struct entry *e)
 		}
 		sqlite3_free(e->pending_txn_frames);
 	}
-	e->pending_txn_frames = 0;
+	e->pending_txn_frames = NULL;
 	e->pending_txn_len = 0;
 	e->pending_txn_last_frame_commit = 0;
 }
@@ -375,7 +322,7 @@ static bool no_pending_txn(const struct entry *e)
 
 static bool write_lock_held(const struct entry *e)
 {
-	return e->shm_locks[WAL_WRITE_LOCK] == VFS2_EXCLUSIVE;
+	return e->shm_locks[WAL_WRITE_LOCK] == EXCLUSIVE;
 }
 
 static bool wal_index_basic_hdr_equal(struct wal_index_basic_hdr a,
@@ -411,7 +358,7 @@ static bool wal_index_recovered(const struct entry *e)
 {
 	PRE(e->shm_regions_len > 0);
 	char *p = e->shm_regions[0];
-	for (size_t i = sizeof(struct wal_index_full_hdr); i < VFS2_WAL_INDEX_REGION_SIZE; i++) {
+	for (size_t i = sizeof(struct wal_index_full_hdr); i < WAL_INDEX_REGION_SIZE; i++) {
 		if (p[i] != 0) {
 			return true;
 		}
@@ -455,6 +402,53 @@ static bool full_hdr_valid(const struct wal_index_full_hdr *ihdr)
 {
 	return basic_hdr_valid(ihdr->basic[0]) &&
 		wal_index_basic_hdr_equal(ihdr->basic[0], ihdr->basic[1]);
+}
+
+static bool wtx_invariant(const struct sm *sm, int prev)
+{
+	(void)prev;
+
+	struct entry *e = CONTAINER_OF(sm, struct entry, wtx_sm);
+	switch (sm_state(sm)) {
+	case WTX_CLOSED:
+		return CHECK(is_closed(e));
+	case WTX_EMPTY;
+		return CHECK(is_open(e)) &&
+			CHECK(wihdr_valid(e)) &&
+			CHECK(!write_lock_held(e)) &&
+			CHECK(fully_backfilled(e)) &&
+			CHECK(no_pending_txn(e));
+	case WTX_ACTIVE:
+		return CHECK(is_open(e)) &&
+			CHECK(wihdr_valid(e)) &&
+			CHECK(write_lock_held(e)) &&
+			CHECK(not_fully_backfilled(e)) &&
+}
+
+static bool wtx_invariant(const struct sm *sm, int prev)
+{
+	(void)prev;
+
+	struct entry *e = CONTAINER_OF(sm, struct entry, wtx_sm);
+	switch (sm_state(sm)) {
+	case WTX_CLOSED:
+		return CHECK(is_cleared(e));
+	case WTX_EMPTY;
+		return CHECK(is_open(e)) &&
+			CHECK(wihdr_valid(e)) &&
+			CHECK(write_lock_held(e)) &&
+			CHECK(cursors_ordered(e)) &&
+			CHECK(all_backfilled(e)) &&
+			CHECK(no_pending_txn(e)) &&
+			CHECK(e->write_cursor == NEED_HDR);
+	case WTX_FOLLOWING:
+		return CHECK(is_open(e)) &&
+			CHECK(wihdr_valid(e)) &&
+			CHECK(cursors_ordered(e)) &&
+			CHECK(!all_committed(e)) &&
+			CHECK(write_lock_held(e)) &&
+			CHECK(no_pending_txn(e))
+	}
 }
 
 static bool wtx_invariant(const struct sm *sm, int prev)
@@ -717,14 +711,14 @@ static int vfs2_wal_post_write(struct entry *e,
 			       int amt,
 			       sqlite3_int64 ofst)
 {
-	uint32_t frame_size = VFS2_WAL_FRAME_HDR_SIZE + e->page_size;
-	if (amt == VFS2_WAL_FRAME_HDR_SIZE) {
+	uint32_t frame_size = WAL_FRAME_HDR_SIZE + e->page_size;
+	if (amt == WAL_FRAME_HDR_SIZE) {
 		ofst -= (sqlite3_int64)sizeof(struct wal_hdr);
 		assert(ofst % frame_size == 0);
 		sqlite3_int64 frame_ofst = ofst / (sqlite3_int64)frame_size;
 		return vfs2_wal_write_frame_hdr(e, buf, (uint32_t)frame_ofst);
 	} else if (amt == (int)e->page_size) {
-		sqlite3_int64 x = ofst - VFS2_WAL_FRAME_HDR_SIZE -
+		sqlite3_int64 x = ofst - WAL_FRAME_HDR_SIZE -
 				  (sqlite3_int64)sizeof(struct wal_hdr);
 		assert(x % frame_size == 0);
 		x /= frame_size;
@@ -906,7 +900,7 @@ static int vfs2_unfetch(sqlite3_file *file, sqlite3_int64 ofst, void *buf)
 	return orig->pMethods->xUnfetch(orig, ofst, buf);
 }
 
-static int vfs2_shm_map(sqlite3_file *file,
+static int shm_map(sqlite3_file *file,
 			int regno,
 			int regsz,
 			int extend,
@@ -961,7 +955,7 @@ static __attribute__((noinline)) int busy(void)
 	return SQLITE_BUSY;
 }
 
-static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
+static int shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 {
 	struct file *xfile = (struct file *)file;
 	PRE(xfile != NULL);
@@ -987,7 +981,7 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 
 	if (flags == (SQLITE_SHM_LOCK | SQLITE_SHM_SHARED)) {
 		for (int i = ofst; i < ofst + n; i++) {
-			if (e->shm_locks[i] == VFS2_EXCLUSIVE) {
+			if (e->shm_locks[i] == EXCLUSIVE) {
 				return busy();
 			}
 		}
@@ -1003,7 +997,7 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 		}
 
 		for (int i = ofst; i < ofst + n; i++) {
-			e->shm_locks[i] = VFS2_EXCLUSIVE;
+			e->shm_locks[i] = EXCLUSIVE;
 		}
 
 		/* XXX maybe this shouldn't be an assertion */
@@ -1018,7 +1012,7 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 		}
 	} else if (flags == (SQLITE_SHM_UNLOCK | SQLITE_SHM_EXCLUSIVE)) {
 		for (int i = ofst; i < ofst + n; i++) {
-			assert(e->shm_locks[i] == VFS2_EXCLUSIVE);
+			assert(e->shm_locks[i] == EXCLUSIVE);
 			e->shm_locks[i] = 0;
 		}
 
@@ -1056,12 +1050,12 @@ static int vfs2_shm_lock(sqlite3_file *file, int ofst, int n, int flags)
 	return SQLITE_OK;
 }
 
-static void vfs2_shm_barrier(sqlite3_file *file)
+static void shm_barrier(sqlite3_file *file)
 {
 	(void)file;
 }
 
-static int vfs2_shm_unmap(sqlite3_file *file, int delete)
+static int shm_unmap(sqlite3_file *file, int delete)
 {
 	struct file *xfile = (struct file *)file;
 	struct entry *e = xfile->entry;
@@ -1096,10 +1090,10 @@ static struct sqlite3_io_methods vfs2_io_methods = {
 	.xFileControl = vfs2_file_control,
 	.xSectorSize = vfs2_sector_size,
 	.xDeviceCharacteristics = vfs2_device_characteristics,
-	.xShmMap = vfs2_shm_map,
-	.xShmLock = vfs2_shm_lock,
-	.xShmBarrier = vfs2_shm_barrier,
-	.xShmUnmap = vfs2_shm_unmap,
+	.xShmMap = shm_map,
+	.xShmLock = shm_lock,
+	.xShmBarrier = shm_barrier,
+	.xShmUnmap = shm_unmap,
 	.xFetch = vfs2_fetch,
 	.xUnfetch = vfs2_unfetch
 };
@@ -1309,11 +1303,11 @@ static int open_entry(struct common *common, const char *name, struct entry *e)
 	if (e->shm_regions == NULL) {
 		return SQLITE_NOMEM;
 	}
-	e->shm_regions[0] = sqlite3_malloc(VFS2_WAL_INDEX_REGION_SIZE);
+	e->shm_regions[0] = sqlite3_malloc(WAL_INDEX_REGION_SIZE);
 	if (e->shm_regions[0] == NULL) {
 		return SQLITE_NOMEM;
 	}
-	memset(e->shm_regions[0], 0, VFS2_WAL_INDEX_REGION_SIZE);
+	memset(e->shm_regions[0], 0, WAL_INDEX_REGION_SIZE);
 	e->shm_regions_len = 1;
 	tracef("REGIONS %p", e);
 
@@ -1331,7 +1325,7 @@ static int open_entry(struct common *common, const char *name, struct entry *e)
 		next = WTX_FLUSH;
 	}
 	if (size_cur >= wal_offset_from_cursor(e->page_size, 1)) {
-		e->shm_locks[WAL_WRITE_LOCK] = VFS2_EXCLUSIVE;
+		e->shm_locks[WAL_WRITE_LOCK] = EXCLUSIVE;
 		next = WTX_FOLLOWING;
 	}
 	sm_move(&e->wtx_sm, next);
@@ -1549,7 +1543,7 @@ int vfs2_unapply(sqlite3_file *file, struct vfs2_wal_slice first_to_unapply)
 	PRE(first_to_unapply.start + first_to_unapply.len <= e->wal_cursor);
 	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
 	PRE(first_to_unapply.start >= ihdr->basic[0].mxFrame);
-	PRE(e->shm_locks[WAL_WRITE_LOCK] == VFS2_EXCLUSIVE);
+	PRE(e->shm_locks[WAL_WRITE_LOCK] == EXCLUSIVE);
 
 	e->wal_cursor = first_to_unapply.start;
 
@@ -1567,7 +1561,7 @@ int vfs2_unhide(sqlite3_file *file)
 	struct file *xfile = (struct file *)file;
 	PRE(xfile->flags & SQLITE_OPEN_MAIN_DB);
 	struct entry *e = xfile->entry;
-	PRE(e->shm_locks[WAL_WRITE_LOCK] == VFS2_EXCLUSIVE);
+	PRE(e->shm_locks[WAL_WRITE_LOCK] == EXCLUSIVE);
 	e->shm_locks[WAL_WRITE_LOCK] = 0;
 
 	struct wal_index_full_hdr *hdr = get_full_hdr(e);
@@ -1591,7 +1585,7 @@ int vfs2_commit(sqlite3_file *file, struct vfs2_wal_slice stop)
 	uint32_t commit = stop.start + stop.len;
 	PRE(e->wal_cursor >= commit);
 	PRE(salts_equal(stop.salts, e->wal_cur_hdr.salts));
-	PRE(e->shm_locks[WAL_WRITE_LOCK] == VFS2_EXCLUSIVE);
+	PRE(e->shm_locks[WAL_WRITE_LOCK] == EXCLUSIVE);
 	sqlite3_file *wal_cur = e->wal_cur;
 	struct wal_frame_hdr fhdr;
 	int rv = wal_cur->pMethods->xRead(wal_cur, &fhdr, sizeof(fhdr), wal_offset_from_cursor(e->page_size, stop.start + stop.len - 1));
@@ -1643,13 +1637,13 @@ int vfs2_poll(sqlite3_file *file, dqlite_vfs_frame **frames, unsigned *n, struct
 
 	uint32_t len = e->pending_txn_len;
 	if (len > 0) {
-		/* Don't go through vfs2_shm_lock here since that has additional
+		/* Don't go through shm_lock here since that has additional
 		 * checks that assume the context of being called from inside
 		 * SQLite. */
 		if (e->shm_locks[WAL_WRITE_LOCK] > 0) {
 			return 1;
 		}
-		e->shm_locks[WAL_WRITE_LOCK] = VFS2_EXCLUSIVE;
+		e->shm_locks[WAL_WRITE_LOCK] = EXCLUSIVE;
 	}
 
 	/* Note, not resetting pending_txn_{start,len} because they are used by later states */
@@ -1907,7 +1901,7 @@ int vfs2_apply_uncommitted(sqlite3_file *file, uint32_t page_size,
 	 * or vfs2_unapply causes the number of committed frames in
 	 * WAL-cur (mxFrame) to equal the number of applied frames
 	 * (wal_cursor). */
-	e->shm_locks[WAL_WRITE_LOCK] = VFS2_EXCLUSIVE;
+	e->shm_locks[WAL_WRITE_LOCK] = EXCLUSIVE;
 	
 	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
 	uint32_t mx = ihdr->basic[0].mxFrame;
