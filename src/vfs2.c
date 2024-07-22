@@ -1997,33 +1997,16 @@ int vfs2_pseudo_read_begin(sqlite3_file *file, uint32_t target, unsigned *out)
 	struct entry *e = xfile->entry;
 	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
 
-	/* adapted from walTryBeginRead */
-	uint32_t max_mark = 0;
-	unsigned max_index = 0;
-	for (unsigned i = 1; i < WAL_NREADER; i++){
-		uint32_t cur = ihdr->marks[i];
-		if (max_mark <= cur && cur <= target) {
-			assert(cur != READ_MARK_UNUSED);
-			max_mark = cur;
-			max_index = i;
-		}
-	}
-	if (max_mark < target || max_index == 0) {
-		for (unsigned i = 1; i < WAL_NREADER; i++) {
-			if (e->shm_locks[read_lock(i)] > 0) {
-				continue;
-			}
+	for (unsigned i = 1; i < WAL_NREADER; i++) {
+		if (e->shm_locks[read_lock(i)] == 0) {
+			e->shm_locks[read_lock(i)] = 1;
 			ihdr->marks[i] = target;
-			max_mark = target;
-			max_index = i;
-			break;
+			*out = i;
+			return 0;
 		}
 	}
-	if (max_index == 0) {
-		return 1;
-	}
-	*out = max_index;
-	return 0;
+
+	return 1;
 }
 
 int vfs2_pseudo_read_end(sqlite3_file *file, unsigned i)
@@ -2031,7 +2014,13 @@ int vfs2_pseudo_read_end(sqlite3_file *file, unsigned i)
 	struct file *xfile = (struct file *)file;
 	PRE(xfile->flags & SQLITE_OPEN_MAIN_DB);
 	struct entry *e = xfile->entry;
-	PRE(e->shm_locks[i] > 0);
-	e->shm_locks[i] -= 1;
+	struct wal_index_full_hdr *ihdr = get_full_hdr(e);
+
+	PRE(1 <= i && i < WAL_NREADER);
+	PRE(e->shm_locks[read_lock(i)] > 0);
+	e->shm_locks[read_lock(i)] -= 1;
+	if (e->shm_locks[read_lock(i)] == 0) {
+		ihdr->marks[i] = READ_MARK_UNUSED;
+	}
 	return 0;
 }
