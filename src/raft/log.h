@@ -34,6 +34,7 @@ struct raft_entry_ref
 	 * raft_entry using them. */
 	struct raft_buffer buf;
 	void *batch;
+	struct sm sm;
 	struct raft_entry_ref
 	    *next; /* Next item in the bucket (for collisions). */
 };

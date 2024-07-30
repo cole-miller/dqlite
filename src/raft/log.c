@@ -6,6 +6,42 @@
 #include "assert.h"
 #include "configuration.h"
 
+enum {
+	ENTRY_CREATED,
+	ENTRY_COMMITTED,
+	ENTRY_REMOVED,
+	ENTRY_SNAPSHOTTED,
+	ENTRY_NR,
+};
+
+static struct sm_conf entry_states[ENTRY_NR] = {
+	[ENTRY_CREATED] = {
+		.name = "created",
+		.allowed = BITS(ENTRY_COMMITTED)|BITS(ENTRY_REMOVED),
+		.flags = SM_INITIAL|SM_FINAL,
+	},
+	[ENTRY_COMMITTED] = {
+		.name = "committed",
+		.allowed = BITS(ENTRY_SNAPSHOTTED),
+		.flags = SM_FINAL,
+	},
+	[ENTRY_REMOVED] = {
+		.name = "removed",
+		.flags = SM_FINAL,
+	},
+	[ENTRY_SNAPSHOTTED] = {
+		.name = "snapshotted",
+		.flags = SM_FINAL,
+	},
+};
+
+static bool entry_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
 /* Calculate the reference count hash table key for the given log entry index in
  * an hash table of the given size.
  *
@@ -30,15 +66,18 @@ static size_t refsKey(const raft_index index, const size_t size)
  * new reference count item is inserted into the hash table.
  *
  * If two log entries have the same index but different terms, the associated
- * bucket will be grown accordingly. */
-static int refsTryInsert(struct raft_entry_ref *table,
-			 const size_t size,
-			 const raft_term term,
-			 const raft_index index,
-			 const unsigned short count,
-			 struct raft_buffer buf,
-			 void *batch,
-			 bool *collision)
+ * bucket will be grown accordingly.
+ *
+ * Returns a pointer to the new reference object on success, or NULL if a
+ * memory allocation failed. */
+static struct raft_entry_ref *refsTryInsert(struct raft_entry_ref *table,
+					    const size_t size,
+					    const raft_term term,
+					    const raft_index index,
+					    const unsigned short count,
+					    struct raft_buffer buf,
+					    void *batch,
+					    bool *collision)
 {
 	struct raft_entry_ref *bucket; /* Bucket associated with this index. */
 	struct raft_entry_ref *next_slot; /* For traversing the bucket slots. */
@@ -70,7 +109,7 @@ static int refsTryInsert(struct raft_entry_ref *table,
 	 * index, then we have a collision and we must abort here. */
 	if (bucket->index != index) {
 		*collision = true;
-		return 0;
+		return NULL;
 	}
 
 	/* If we get here it means that the bucket is in use to refcount one or
@@ -99,7 +138,7 @@ static int refsTryInsert(struct raft_entry_ref *table,
 
 	slot = raft_malloc(sizeof *slot);
 	if (slot == NULL) {
-		return RAFT_NOMEM;
+		return NULL;
 	}
 
 	last_slot->next = slot;
@@ -114,7 +153,7 @@ fill:
 
 	*collision = false;
 
-	return 0;
+	return slot;
 }
 
 /* Move the slots of the given bucket into the given reference count hash
@@ -138,27 +177,29 @@ static int refsMove(struct raft_entry_ref *bucket,
 	 * table, then free it. */
 	next_slot = bucket;
 	while (next_slot != NULL) {
+		struct raft_entry_ref *ref;
+		struct sm sm;
 		bool collision;
-		int rv;
 
 		slot = next_slot;
 
 		/* Insert the reference count for this entry into the new table.
 		 */
-		rv = refsTryInsert(table, size, slot->term, slot->index,
-				   slot->count, slot->buf, slot->batch,
-				   &collision);
+		ref = refsTryInsert(table, size, slot->term, slot->index,
+				    slot->count, slot->buf, slot->batch,
+				    &collision);
 
 		next_slot = slot->next;
-
+		sm = slot->sm;
 		/* Unless this is the very first slot in the bucket, we need to
 		 * free the slot. */
 		if (slot != bucket) {
 			raft_free(slot);
 		}
-
-		if (rv != 0) {
-			return rv;
+		if (ref != NULL) {
+			ref->sm = sm;
+		} else {
+			return RAFT_NOMEM;
 		}
 
 		/* The given hash table is assumed to be large enough to hold
@@ -213,11 +254,11 @@ static int refsGrow(struct raft_log *l)
 
 /* Initialize the reference count of the entry with the given index, setting it
  * to 1. */
-static int refsInit(struct raft_log *l,
-		    const raft_term term,
-		    const raft_index index,
-		    struct raft_buffer buf,
-		    void *batch)
+static struct raft_entry_ref *refsInit(struct raft_log *l,
+				       const raft_term term,
+				       const raft_index index,
+				       struct raft_buffer buf,
+				       void *batch)
 {
 	int i;
 
@@ -230,7 +271,7 @@ static int refsInit(struct raft_log *l,
 		l->refs_size = LOG__REFS_INITIAL_SIZE;
 		l->refs = raft_calloc(l->refs_size, sizeof *l->refs);
 		if (l->refs == NULL) {
-			return RAFT_NOMEM;
+			return NULL;
 		}
 	}
 
@@ -243,25 +284,27 @@ static int refsInit(struct raft_log *l,
 	 * where this is not enough. */
 	for (i = 0; i < 10; i++) {
 		bool collision;
+		struct raft_entry_ref *ref;
 		int rc;
 
-		rc = refsTryInsert(l->refs, l->refs_size, term, index, 1, buf,
-				   batch, &collision);
-		if (rc != 0) {
-			return RAFT_NOMEM;
-		}
-
-		if (!collision) {
-			return 0;
+		ref = refsTryInsert(l->refs, l->refs_size, term, index, 1, buf,
+				    batch, &collision);
+		if (ref == NULL && !collision) {
+			return NULL;
+		} else if (!collision) {
+			sm_init(&ref->sm, entry_invariant, NULL, entry_states,
+				"entry", ENTRY_CREATED);
+			return ref;
 		}
 
 		rc = refsGrow(l);
 		if (rc != 0) {
-			return rc;
+			assert(rc == RAFT_NOMEM);
+			return NULL;
 		}
 	};
 
-	return RAFT_NOMEM;
+	return NULL;
 }
 
 /* Increment the refcount of the entry with the given term and index. */
@@ -333,6 +376,7 @@ static bool refsDecr(struct raft_log *l,
 	}
 
 	/* If the refcount has dropped to zero, delete the slot. */
+	sm_fini(&slot->sm);
 	if (prev_slot != NULL) {
 		/* This isn't the very first slot, simply unlink it from the
 		 * slot list. */
@@ -407,6 +451,7 @@ void logClose(struct raft_log *l)
 			/* We require that there are no outstanding references
 			 * to active entries. */
 			assert(slot->count == 1);
+			sm_fini(&slot->sm);
 
 			/* TODO: we should support the case where the bucket has
 			 * more than one slot. */
@@ -552,6 +597,7 @@ int logAppend(struct raft_log *l,
 {
 	int rv;
 	struct raft_entry *entry;
+	struct raft_entry_ref *ref;
 	raft_index index;
 
 	assert(l != NULL);
@@ -566,9 +612,9 @@ int logAppend(struct raft_log *l,
 
 	index = logLastIndex(l) + 1;
 
-	rv = refsInit(l, term, index, buf, batch);
-	if (rv != 0) {
-		return rv;
+	ref = refsInit(l, term, index, buf, batch);
+	if (ref == NULL) {
+		return RAFT_NOMEM;
 	}
 
 	entry = &l->entries[l->back];
