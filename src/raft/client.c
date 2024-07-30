@@ -4,7 +4,6 @@
 #include "assert.h"
 #include "configuration.h"
 #include "err.h"
-#include "lifecycle.h"
 #include "log.h"
 #include "membership.h"
 #include "progress.h"

@@ -12,7 +12,6 @@
 #include "err.h"
 #include "flags.h"
 #include "heap.h"
-#include "lifecycle.h"
 #include "log.h"
 #include "membership.h"
 #include "progress.h"
