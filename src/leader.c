@@ -12,9 +12,68 @@
 #include "leader.h"
 #include "lib/threadpool.h"
 #include "server.h"
+#include "src/lib/sm.h"
 #include "tracing.h"
 #include "utils.h"
 #include "vfs.h"
+
+/**
+ * State machine for exec requests.
+ */
+enum {
+	EXEC_START,
+	EXEC_BARRIER,
+	EXEC_STEPPED,
+	EXEC_POLLED,
+	EXEC_SUBMITTED,
+	EXEC_RESOLVED,
+	EXEC_DONE,
+	EXEC_FAILED,
+	EXEC_NR,
+};
+
+static const struct sm_conf exec_states[EXEC_NR] = {
+	[EXEC_START] = {
+		.name = "start",
+		.allowed = BITS(EXEC_BARRIER)|BITS(EXEC_FAILED)|BITS(EXEC_DONE),
+		.flags = SM_INITIAL,
+	},
+	[EXEC_BARRIER] = {
+		.name = "barrier",
+		.allowed = BITS(EXEC_STEPPED)|BITS(EXEC_FAILED)|BITS(EXEC_DONE),
+	},
+	[EXEC_STEPPED] = {
+		.name = "stepped",
+		.allowed = BITS(EXEC_POLLED)|BITS(EXEC_FAILED)|BITS(EXEC_DONE),
+	},
+	[EXEC_POLLED] = {
+		.name = "polled",
+		.allowed = BITS(EXEC_SUBMITTED)|BITS(EXEC_FAILED)|BITS(EXEC_DONE),
+	},
+	[EXEC_SUBMITTED] = {
+		.name = "submitted",
+		.allowed = BITS(EXEC_RESOLVED)|BITS(EXEC_FAILED)|BITS(EXEC_DONE),
+	},
+	[EXEC_RESOLVED] = {
+		.name = "resolved",
+		.allowed = BITS(EXEC_DONE)|BITS(EXEC_FAILED),
+	},
+	[EXEC_DONE] = {
+		.name = "done",
+		.flags = SM_FINAL,
+	},
+	[EXEC_FAILED] = {
+		.name = "failed",
+		.flags = SM_FAILURE|SM_FINAL,
+	},
+};
+
+static bool exec_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
 
 /* Called when a leader exec request terminates and the associated callback can
  * be invoked. */
@@ -22,6 +81,12 @@ static void leaderExecDone(struct exec *req)
 {
 	tracef("leader exec done id:%" PRIu64, req->id);
 	req->leader->exec = NULL;
+	if (req->status == 0) {
+		sm_move(&req->sm, EXEC_DONE);
+	} else {
+		sm_fail(&req->sm, EXEC_FAILED, req->status);
+	}
+	sm_fini(&req->sm);
 	if (req->cb != NULL) {
 		req->cb(req, req->status);
 	}
@@ -252,6 +317,7 @@ static void leaderApplyFramesCb(struct raft_apply *req,
 		raft_free(apply);
 		return;
 	}
+	sm_move(&l->exec->sm, EXEC_RESOLVED);
 
 	(void)result;
 
@@ -341,8 +407,10 @@ static int leaderApplyFrames(struct exec *req,
 #else
 	/* TODO actual WAL slice goes here */
 	struct raft_entry_local_data local_data = {};
-	rv = raft_apply(l->raft, &apply->req, &buf, &local_data, 1, leaderApplyFramesCb);
+	rv = raft_apply(l->raft, &apply->req, &buf, &local_data, 1,
+			leaderApplyFramesCb);
 #endif
+	sm_move(&req->sm, EXEC_SUBMITTED);
 	if (rv != 0) {
 		tracef("raft apply failed %d", rv);
 		goto err_after_command_encode;
@@ -376,10 +444,12 @@ static void leaderExecV2(struct exec *req, enum pool_half half)
 
 	if (half == POOL_TOP_HALF) {
 		req->status = sqlite3_step(req->stmt);
+		sm_move(&req->sm, EXEC_STEPPED);
 		return;
 	} /* else POOL_BOTTOM_HALF => */
 
 	rv = VfsPoll(vfs, db->path, &frames, &n);
+	sm_move(&req->sm, EXEC_POLLED);
 	if (rv != 0 || n == 0) {
 		tracef("vfs poll");
 		goto finish;
@@ -439,6 +509,8 @@ static void execBarrierCb(struct barrier *barrier, int status)
 	struct exec *req = barrier->data;
 	struct leader *l = req->leader;
 
+	sm_move(&req->sm, EXEC_BARRIER);
+
 	if (status != 0) {
 		l->exec->status = status;
 		leaderExecDone(l->exec);
@@ -448,9 +520,10 @@ static void execBarrierCb(struct barrier *barrier, int status)
 #ifdef DQLITE_NEXT
 	struct dqlite_node *node = l->raft->data;
 	pool_t *pool = !!(pool_ut_fallback()->flags & POOL_FOR_UT)
-		? pool_ut_fallback() : &node->pool;
-	pool_queue_work(pool, &req->work, l->db->cookie,
-			WT_UNORD, exec_top, exec_bottom);
+			   ? pool_ut_fallback()
+			   : &node->pool;
+	pool_queue_work(pool, &req->work, l->db->cookie, WT_UNORD, exec_top,
+			exec_bottom);
 #else
 	leaderExecV2(req, POOL_TOP_HALF);
 	leaderExecV2(req, POOL_BOTTOM_HALF);
@@ -478,6 +551,8 @@ int leader__exec(struct leader *l,
 	req->barrier.data = req;
 	req->barrier.cb = NULL;
 	req->work = (pool_work_t){};
+	sm_init(&req->sm, exec_invariant, NULL, exec_states, "exec",
+		EXEC_START);
 
 	rv = leader__barrier(l, &req->barrier, execBarrierCb);
 	if (rv != 0) {
