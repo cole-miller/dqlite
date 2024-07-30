@@ -1,3 +1,4 @@
+#include "../lib/queue.h"
 #include "../raft.h"
 #include "../tracing.h"
 #include "assert.h"
@@ -7,7 +8,6 @@
 #include "log.h"
 #include "membership.h"
 #include "progress.h"
-#include "../lib/queue.h"
 #include "replication.h"
 #include "request.h"
 
@@ -91,7 +91,8 @@ int raft_barrier(struct raft *r, struct raft_barrier *req, raft_barrier_cb cb)
 	req->index = index;
 	req->cb = cb;
 
-	rv = logAppend(r->log, r->current_term, RAFT_BARRIER, buf, (struct raft_entry_local_data){}, true, NULL);
+	rv = logAppend(r->log, r->current_term, RAFT_BARRIER, buf,
+		       (struct raft_entry_local_data){}, true, NULL);
 	if (rv != 0) {
 		goto err_after_buf_alloc;
 	}

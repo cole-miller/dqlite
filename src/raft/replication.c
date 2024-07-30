@@ -7,6 +7,7 @@
 #ifdef __GLIBC__
 #include "error.h"
 #endif
+#include "../lib/queue.h"
 #include "../tracing.h"
 #include "err.h"
 #include "flags.h"
@@ -15,7 +16,6 @@
 #include "log.h"
 #include "membership.h"
 #include "progress.h"
-#include "../lib/queue.h"
 #include "replication.h"
 #include "request.h"
 #include "snapshot.h"
@@ -30,8 +30,7 @@
 
 /* Context of a RAFT_IO_APPEND_ENTRIES request that was submitted with
  * raft_io_>send(). */
-struct sendAppendEntries
-{
+struct sendAppendEntries {
 	struct raft *raft;        /* Instance sending the entries. */
 	struct raft_io_send send; /* Underlying I/O send request. */
 	raft_index index;         /* Index of the first entry in the request. */
@@ -142,8 +141,7 @@ err:
 
 /* Context of a RAFT_IO_INSTALL_SNAPSHOT request that was submitted with
  * raft_io_>send(). */
-struct sendInstallSnapshot
-{
+struct sendInstallSnapshot {
 	struct raft *raft;               /* Instance sending the snapshot. */
 	struct raft_io_snapshot_get get; /* Snapshot get request. */
 	struct raft_io_send send;        /* Underlying I/O send request. */
@@ -408,8 +406,7 @@ int replicationHeartbeat(struct raft *r)
 }
 
 /* Context for a write log entries request that was submitted by a leader. */
-struct appendLeader
-{
+struct appendLeader {
 	struct raft *raft; /* Instance that has submitted the request */
 	raft_index index;  /* Index of the first entry in the request. */
 	struct raft_entry *entries; /* Entries referenced in the request. */
@@ -881,8 +878,7 @@ static void sendAppendEntriesResult(
 }
 
 /* Context for a write log entries request that was submitted by a follower. */
-struct appendFollower
-{
+struct appendFollower {
 	struct raft *raft; /* Instance that has submitted the request */
 	raft_index index;  /* Index of the first entry in the request. */
 	struct raft_append_entries args;
@@ -1229,13 +1225,14 @@ int replicationAppend(struct raft *r,
 		 * spikes in certain edge cases.
 		 * https://github.com/canonical/dqlite/issues/276
 		 */
-		struct raft_entry copy = {0};
+		struct raft_entry copy = { 0 };
 		rv = entryCopy(entry, &copy);
 		if (rv != 0) {
 			goto err_after_request_alloc;
 		}
 
-		rv = logAppend(r->log, copy.term, copy.type, copy.buf, (struct raft_entry_local_data){}, false, NULL);
+		rv = logAppend(r->log, copy.term, copy.type, copy.buf,
+			       (struct raft_entry_local_data){}, false, NULL);
 		if (rv != 0) {
 			goto err_after_request_alloc;
 		}
@@ -1289,8 +1286,7 @@ err:
 	return rv;
 }
 
-struct recvInstallSnapshot
-{
+struct recvInstallSnapshot {
 	struct raft *raft;
 	struct raft_snapshot snapshot;
 	raft_term term; /* Used to check for state transitions. */
