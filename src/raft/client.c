@@ -47,7 +47,9 @@ int raft_apply(struct raft *r,
 		goto err;
 	}
 
-	lifecycleRequestStart(r, (struct request *)req);
+	sm_init(&req->sm, request_invariant, NULL, request_states, "request",
+		REQUEST_START);
+	queue_insert_tail(&r->leader_state.requests, &req->queue);
 
 	rv = replicationTrigger(r, index);
 	if (rv != 0) {
@@ -97,7 +99,9 @@ int raft_barrier(struct raft *r, struct raft_barrier *req, raft_barrier_cb cb)
 		goto err_after_buf_alloc;
 	}
 
-	lifecycleRequestStart(r, (struct request *)req);
+	sm_init(&req->sm, request_invariant, NULL, request_states, "request",
+		REQUEST_START);
+	queue_insert_tail(&r->leader_state.requests, &req->queue);
 
 	rv = replicationTrigger(r, index);
 	if (rv != 0) {
