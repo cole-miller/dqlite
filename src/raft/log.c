@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "../raft.h"
+#include "../utils.h" /* PRE, POST */
 #include "assert.h"
 #include "configuration.h"
 
@@ -307,33 +308,36 @@ static struct raft_entry_ref *refsInit(struct raft_log *l,
 	return NULL;
 }
 
-/* Increment the refcount of the entry with the given term and index. */
-static void refsIncr(struct raft_log *l,
+/* Lookup the slot associated with the given term/index, which must have
+ * been previously inserted. */
+static struct raft_entry_ref *refs_get(struct raft_log *l,
 		     const raft_term term,
 		     const raft_index index)
 {
-	size_t key;                  /* Hash table key for the given index. */
-	struct raft_entry_ref *slot; /* Slot for the given term/index */
-
 	assert(l != NULL);
 	assert(term > 0);
 	assert(index > 0);
 
-	key = refsKey(index, l->refs_size);
-
-	/* Lookup the slot associated with the given term/index, which must have
-	 * been previously inserted. */
-	slot = &l->refs[key];
+	size_t key = refsKey(index, l->refs_size);
+	struct raft_entry_ref *slot = &l->refs[key];
 	while (1) {
-		assert(slot != NULL);
+		PRE(slot != NULL);
 		assert(slot->index == index);
 		if (slot->term == term) {
 			break;
 		}
 		slot = slot->next;
 	}
-	assert(slot != NULL);
+	POST(slot != NULL);
+	return slot;
+}
 
+/* Increment the refcount of the entry with the given term and index. */
+static void refsIncr(struct raft_log *l,
+		     const raft_term term,
+		     const raft_index index)
+{
+	struct raft_entry_ref *slot = refs_get(l, term, index);
 	slot->count++;
 }
 
@@ -341,7 +345,8 @@ static void refsIncr(struct raft_log *l,
  * indicating whether the entry has now zero references. */
 static bool refsDecr(struct raft_log *l,
 		     const raft_term term,
-		     const raft_index index)
+		     const raft_index index,
+		     int state)
 {
 	size_t key;                  /* Hash table key for the given index. */
 	struct raft_entry_ref *slot; /* Slot for the given term/index */
@@ -369,6 +374,9 @@ static bool refsDecr(struct raft_log *l,
 	}
 
 	slot->count--;
+	if (state >= 0) {
+		sm_move(&slot->sm, state);
+	}
 
 	if (slot->count > 0) {
 		/* The entry is still referenced. */
@@ -871,7 +879,7 @@ void logRelease(struct raft_log *l,
 		struct raft_entry *entry = &entries[i];
 		bool unref;
 
-		unref = refsDecr(l, entry->term, index + i);
+		unref = refsDecr(l, entry->term, index + i, -1);
 
 		/* If there are no outstanding references to this entry, free
 		 * its payload if it's not part of a batch, or check if we can
@@ -953,7 +961,7 @@ static void removeSuffix(struct raft_log *l,
 		}
 
 		entry = &l->entries[l->back];
-		unref = refsDecr(l, entry->term, start + n - i - 1);
+		unref = refsDecr(l, entry->term, start + n - i - 1, ENTRY_REMOVED);
 
 		if (unref && destroy) {
 			destroyEntry(l, entry);
@@ -1002,7 +1010,7 @@ static void removePrefix(struct raft_log *l, const raft_index index)
 		}
 		l->offset++;
 
-		unref = refsDecr(l, entry->term, l->offset);
+		unref = refsDecr(l, entry->term, l->offset, ENTRY_SNAPSHOTTED);
 
 		if (unref) {
 			destroyEntry(l, entry);
