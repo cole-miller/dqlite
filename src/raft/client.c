@@ -52,14 +52,16 @@ int raft_apply(struct raft *r,
 
 	rv = replicationTrigger(r, index);
 	if (rv != 0) {
-		goto err_after_log_append;
+		goto err_after_request_start;
 	}
 
 	return 0;
 
-err_after_log_append:
+err_after_request_start:
 	logDiscard(r->log, index);
 	queue_remove(&req->queue);
+	sm_fail(&req->sm, REQUEST_FAILED, rv);
+	sm_fini(&req->sm);
 err:
 	assert(rv != 0);
 	return rv;
@@ -92,27 +94,28 @@ int raft_barrier(struct raft *r, struct raft_barrier *req, raft_barrier_cb cb)
 	req->index = index;
 	req->cb = cb;
 
-	rv = logAppend(r->log, r->current_term, RAFT_BARRIER, buf,
-		       (struct raft_entry_local_data){}, true, NULL);
-	if (rv != 0) {
-		goto err_after_buf_alloc;
-	}
-
 	sm_init(&req->sm, request_invariant, NULL, request_states, "request",
 		REQUEST_START);
 	queue_insert_tail(&r->leader_state.requests, &req->queue);
 
+	rv = logAppend(r->log, r->current_term, RAFT_BARRIER, buf,
+		       (struct raft_entry_local_data){}, true, NULL);
+	if (rv != 0) {
+		goto err_after_request_start;
+	}
+
 	rv = replicationTrigger(r, index);
 	if (rv != 0) {
-		goto err_after_log_append;
+		goto err_after_request_start;
 	}
 
 	return 0;
 
-err_after_log_append:
+err_after_request_start:
 	logDiscard(r->log, index);
 	queue_remove(&req->queue);
-err_after_buf_alloc:
+	sm_fail(&req->sm, REQUEST_FAILED, rv);
+	sm_fini(&req->sm);
 	raft_free(buf.base);
 err:
 	return rv;
