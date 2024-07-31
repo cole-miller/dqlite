@@ -22,8 +22,7 @@
  * made to see if all other entries of the same batch also have a zero refcount,
  * and the memory that @batch points to gets released if that's the case.
  */
-struct raft_entry_ref
-{
+struct raft_entry_ref {
 	raft_term term;       /* Term of the entry being ref-counted. */
 	raft_index index;     /* Index of the entry being ref-counted. */
 	unsigned short count; /* Number of references. */
@@ -46,8 +45,7 @@ struct raft_entry_ref
  * makes some frequent operations very efficient (e.g. deleting the first N
  * entries when snapshotting).
  */
-struct raft_log
-{
+struct raft_log {
 	struct raft_entry *entries; /* Circular buffer of log entries. */
 	size_t size;        /* Number of available slots in the buffer. */
 	size_t front, back; /* Indexes of used slots [front, back). */
