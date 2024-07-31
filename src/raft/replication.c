@@ -9,6 +9,7 @@
 #endif
 #include "../lib/queue.h"
 #include "../tracing.h"
+#include "append_obs.h"
 #include "err.h"
 #include "flags.h"
 #include "heap.h"
@@ -626,6 +627,11 @@ static int appendLeader(struct raft *r, raft_index index)
 	request->entries = entries;
 	request->n = n;
 	request->req.data = request;
+	sm_init(&request->req.sm, append_invariant, NULL, append_states, "append.leader", APPEND_START);
+	for (unsigned i = 0; i < n; i++) {
+		struct sm *entry_sm = log_get_entry_sm(r->log, entries[i].term, index + i);
+		sm_relate(entry_sm, &request->req.sm);
+	}
 
 	rv = r->io->append(r->io, &request->req, entries, n, appendLeaderCb);
 	if (rv != 0) {
@@ -1256,6 +1262,7 @@ int replicationAppend(struct raft *r,
 	}
 
 	request->req.data = request;
+	sm_init(&request->req.sm, append_invariant, NULL, append_states, "append.follower", APPEND_START);
 	rv = r->io->append(r->io, &request->req, request->args.entries,
 			   request->args.n_entries, appendFollowerCb);
 	if (rv != 0) {

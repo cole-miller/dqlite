@@ -1,4 +1,5 @@
 #include "assert.h"
+#include "append_obs.h"
 #include "byte.h"
 #include "heap.h"
 #include "../lib/queue.h"
@@ -67,6 +68,7 @@ struct uvAppend
 	unsigned n;                       /* Number of entries */
 	struct uvAliveSegment *segment;   /* Segment to write to */
 	queue queue;
+	struct sm sm;
 };
 
 static void uvAliveSegmentWriterCloseCb(struct UvWriter *writer)
@@ -109,12 +111,15 @@ static void uvAppendFinishRequestsInQueue(struct uv *uv, queue *q, int status)
 		append = QUEUE_DATA(head, struct uvAppend, queue);
 		/* Rollback the append next index if the result was
 		 * unsuccessful. */
-		if (status != 0) {
+		if (status == 0) {
+			sm_move(&append->sm, APPEND_DONE);
+		} else {
 			tracef("rollback uv->append_next_index was:%llu",
 			       uv->append_next_index);
 			uv->append_next_index -= append->n;
 			tracef("rollback uv->append_next_index now:%llu",
 			       uv->append_next_index);
+			sm_fail(&append->sm, APPEND_FAILED, status);
 		}
 		queue_remove(head);
 		queue_insert_tail(&queue_copy, head);
@@ -125,6 +130,7 @@ static void uvAppendFinishRequestsInQueue(struct uv *uv, queue *q, int status)
 		head = queue_head(&queue_copy);
 		append = QUEUE_DATA(head, struct uvAppend, queue);
 		queue_remove(head);
+		sm_fini(&append->sm);
 		req = append->req;
 		RaftHeapFree(append);
 		req->cb(req, status);
@@ -387,6 +393,8 @@ start:
 		n_reqs++;
 		rv = uvAliveSegmentEncodeEntriesToWriteBuf(segment, append);
 		if (rv != 0) {
+			/* FIXME in this case we should take care that the
+			 * append requests already moved to `q` are not lost. */
 			goto err;
 		}
 	}
@@ -410,6 +418,8 @@ start:
 
 	while (!queue_empty(&q)) {
 		head = queue_head(&q);
+		append = QUEUE_DATA(head, struct uvAppend, queue);
+		sm_move(&append->sm, APPEND_WRITING);
 		queue_remove(head);
 		queue_insert_tail(&uv->append_writing_reqs, head);
 	}
@@ -648,6 +658,7 @@ static int uvAppendEnqueueRequest(struct uv *uv, struct uvAppend *append)
 
 	append->segment = segment;
 	queue_insert_tail(&uv->append_pending_reqs, &append->queue);
+	sm_move(&append->sm, APPEND_PENDING);
 	uv->append_next_index += append->n;
 	tracef("set uv->append_next_index %llu", uv->append_next_index);
 
@@ -698,6 +709,8 @@ int UvAppend(struct raft_io *io,
 	append->req = req;
 	append->entries = entries;
 	append->n = n;
+	append->sm = req->sm;
+	POST(append->sm.is_locked == NULL);
 	req->cb = cb;
 
 	rv = uvCheckEntryBuffersAligned(uv, entries, n);
@@ -724,6 +737,8 @@ int UvAppend(struct raft_io *io,
 err_after_req_alloc:
 	RaftHeapFree(append);
 err:
+	sm_fail(&req->sm, APPEND_FAILED, rv);
+	sm_fini(&req->sm);
 	assert(rv != 0);
 	return rv;
 }
