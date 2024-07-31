@@ -101,6 +101,10 @@ raft_index logSnapshotIndex(struct raft_log *l);
  * invoked. Return #NULL if there is no such entry. */
 const struct raft_entry *logGet(struct raft_log *l, const raft_index index);
 
+struct sm *log_get_entry_sm(struct raft_log *l, raft_term term, raft_index index);
+
+void log_mark_committed(struct raft_log *l, raft_term term, raft_index index);
+
 /* Check whether the hash map is already tracking an entry with the given
  * @term and @index (that is not part of the "logical" log). If so, increment
  * the refcount of that entry and set @reinstated to true; otherwise, set
@@ -118,13 +122,6 @@ int logAppend(struct raft_log *l,
 	      struct raft_entry_local_data local_data,
 	      bool is_local,
 	      void *batch);
-
-/* Convenience to append a series of #RAFT_COMMAND entries. */
-int logAppendCommands(struct raft_log *l,
-		      const raft_term term,
-		      const struct raft_buffer bufs[],
-		      const struct raft_entry_local_data local_data[],
-		      const unsigned n);
 
 /* Convenience to encode and append a single #RAFT_CHANGE entry. */
 int logAppendConfiguration(struct raft_log *l,

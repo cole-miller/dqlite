@@ -639,31 +639,6 @@ int logAppend(struct raft_log *l,
 	return 0;
 }
 
-int logAppendCommands(struct raft_log *l,
-		      const raft_term term,
-		      const struct raft_buffer bufs[],
-		      const struct raft_entry_local_data local_data[],
-		      const unsigned n)
-{
-	unsigned i;
-	int rv;
-
-	assert(l != NULL);
-	assert(term > 0);
-	assert(bufs != NULL);
-	assert(n > 0);
-
-	for (i = 0; i < n; i++) {
-		struct raft_entry_local_data loc = (local_data != NULL) ? local_data[i] : (struct raft_entry_local_data){};
-		rv = logAppend(l, term, RAFT_COMMAND, bufs[i], loc, true, NULL);
-		if (rv != 0) {
-			return rv;
-		}
-	}
-
-	return 0;
-}
-
 int logAppendConfiguration(struct raft_log *l,
 			   const raft_term term,
 			   const struct raft_configuration *configuration)
@@ -792,6 +767,18 @@ const struct raft_entry *logGet(struct raft_log *l, const raft_index index)
 	assert(i < l->size);
 
 	return &l->entries[i];
+}
+
+struct sm *log_get_entry_sm(struct raft_log *l, raft_term term, raft_index index)
+{
+	struct raft_entry_ref *slot = refs_get(l, term, index);
+	return &slot->sm;
+}
+
+void log_mark_committed(struct raft_log *l, raft_term term, raft_index index)
+{
+	struct raft_entry_ref *slot = refs_get(l, term, index);
+	sm_move(&slot->sm, ENTRY_COMMITTED);
 }
 
 int logAcquire(struct raft_log *l,
