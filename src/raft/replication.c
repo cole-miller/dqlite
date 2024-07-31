@@ -1763,6 +1763,8 @@ int replicationApply(struct raft *r)
 		       entry->type == RAFT_BARRIER ||
 		       entry->type == RAFT_CHANGE);
 
+		log_mark_committed(r->log, entry->term, index);
+
 		switch (entry->type) {
 			case RAFT_COMMAND:
 				rv = applyCommand(r, index, &entry->buf);
