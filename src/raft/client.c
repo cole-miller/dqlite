@@ -72,7 +72,6 @@ err_after_request_start:
 	logDiscard(r->log, index);
 	queue_remove(&req->queue);
 	sm_fail(&req->sm, REQUEST_FAILED, rv);
-	sm_fini(&req->sm);
 err:
 	assert(rv != 0);
 	return rv;
