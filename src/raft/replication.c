@@ -627,13 +627,11 @@ static int appendLeader(struct raft *r, raft_index index)
 	request->entries = entries;
 	request->n = n;
 	request->req.data = request;
-	sm_init(&request->req.sm, append_invariant, NULL, append_states, "append-leader", APPEND_START);
+	rv = r->io->append(r->io, &request->req, entries, n, appendLeaderCb);
 	for (unsigned i = 0; i < n; i++) {
 		struct sm *entry_sm = log_get_entry_sm(r->log, entries[i].term, index + i);
 		sm_relate(entry_sm, &request->req.sm);
 	}
-
-	rv = r->io->append(r->io, &request->req, entries, n, appendLeaderCb);
 	if (rv != 0) {
 		ErrMsgTransfer(r->io->errmsg, r->errmsg, "io");
 		goto err_after_request_alloc;
@@ -642,6 +640,7 @@ static int appendLeader(struct raft *r, raft_index index)
 	return 0;
 
 err_after_request_alloc:
+	sm_fini(&request->req.sm);
 	raft_free(request);
 err_after_entries_acquired:
 	logRelease(r->log, index, entries, n);

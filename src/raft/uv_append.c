@@ -709,9 +709,8 @@ int UvAppend(struct raft_io *io,
 	append->req = req;
 	append->entries = entries;
 	append->n = n;
-	append->sm = req->sm;
-	POST(append->sm.is_locked == NULL);
 	req->cb = cb;
+	sm_init(&req->sm, append_invariant, NULL, append_states, "append", APPEND_START);
 
 	rv = uvCheckEntryBuffersAligned(uv, entries, n);
 	if (rv != 0) {
@@ -738,7 +737,6 @@ err_after_req_alloc:
 	RaftHeapFree(append);
 err:
 	sm_fail(&req->sm, APPEND_FAILED, rv);
-	sm_fini(&req->sm);
 	assert(rv != 0);
 	return rv;
 }
