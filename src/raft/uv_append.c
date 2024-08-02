@@ -1,5 +1,4 @@
 #include "assert.h"
-#include "append_obs.h"
 #include "byte.h"
 #include "heap.h"
 #include "../lib/queue.h"
@@ -39,6 +38,47 @@
  * In all these cases we mark the instance as errored and fire the relevant
  * callbacks.
  **/
+
+enum {
+	APPEND_START,
+	APPEND_PENDING,
+	APPEND_WRITING,
+	APPEND_DONE,
+	APPEND_FAILED,
+	APPEND_NR,
+};
+
+static struct sm_conf append_states[APPEND_NR] = {
+	[APPEND_START] = {
+		.name = "start",
+		.allowed = BITS(APPEND_PENDING),
+		.flags = SM_INITIAL,
+	},
+	[APPEND_PENDING] = {
+		.name = "pending",
+		.allowed = BITS(APPEND_WRITING)|BITS(APPEND_FAILED),
+	},
+	[APPEND_WRITING] = {
+		.name = "writing",
+		.allowed = BITS(APPEND_DONE)|BITS(APPEND_FAILED),
+	},
+	[APPEND_DONE] = {
+		.name = "done",
+		.flags = SM_FINAL,
+	},
+	[APPEND_FAILED] = {
+		.name = "failed",
+		.flags = SM_FINAL|SM_FAILURE,
+	},
+};
+
+static inline bool append_invariant(const struct sm *sm, int prev)
+{
+	(void)append_states;
+	(void)sm;
+	(void)prev;
+	return true;
+}
 
 /* An open segment being written or waiting to be written. */
 struct uvAliveSegment

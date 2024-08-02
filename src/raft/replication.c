@@ -9,7 +9,6 @@
 #endif
 #include "../lib/queue.h"
 #include "../tracing.h"
-#include "append_obs.h"
 #include "err.h"
 #include "flags.h"
 #include "heap.h"
@@ -1261,18 +1260,20 @@ int replicationAppend(struct raft *r,
 	}
 
 	request->req.data = request;
-	sm_init(&request->req.sm, append_invariant, NULL, append_states, "append-follower", APPEND_START);
 	rv = r->io->append(r->io, &request->req, request->args.entries,
 			   request->args.n_entries, appendFollowerCb);
+	/* TODO sm_relate here */
 	if (rv != 0) {
 		ErrMsgTransfer(r->io->errmsg, r->errmsg, "io");
-		goto err_after_acquire_entries;
+		goto err_after_sm_relate;
 	}
 	r->follower_state.append_in_flight_count += 1;
 
 	entryBatchesDestroy(args->entries, args->n_entries);
 	return 0;
 
+err_after_sm_relate:
+	sm_fini(&request->req.sm);
 err_after_acquire_entries:
 	/* Release the entries related to the IO request */
 	logRelease(r->log, request->index, request->args.entries,
