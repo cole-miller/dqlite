@@ -43,7 +43,7 @@ int raft_apply(struct raft *r,
 	req->index = start;
 	req->cb = cb;
 
-	sm_init(&req->sm, request_invariant, NULL, request_states, "request",
+	sm_init(&req->sm, request_invariant, NULL, request_states, "apply-request",
 		REQUEST_START);
 	queue_insert_tail(&r->leader_state.requests, &req->queue);
 
@@ -106,7 +106,7 @@ int raft_barrier(struct raft *r, struct raft_barrier *req, raft_barrier_cb cb)
 	req->index = index;
 	req->cb = cb;
 
-	sm_init(&req->sm, request_invariant, NULL, request_states, "request",
+	sm_init(&req->sm, request_invariant, NULL, request_states, "barrier-request",
 		REQUEST_START);
 	queue_insert_tail(&r->leader_state.requests, &req->queue);
 
