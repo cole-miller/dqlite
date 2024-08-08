@@ -215,6 +215,8 @@ static int uvClientInit(struct uvClient *c,
 	queue_init(&c->pending);
 	c->closing = false;
 	sm_init(&c->sm, client_invariant, NULL, client_states, "client", CLIENT_INIT);
+	sm_attr(&c->sm, "targ-id", "%llu", c->id);
+	sm_attr(&c->sm, "targ-addr", "%s", c->address);
 	queue_insert_tail(&uv->clients, &c->queue);
 	return 0;
 }
@@ -626,6 +628,7 @@ int UvSend(struct raft_io *io,
 		goto err_after_send_alloc;
 	}
 
+	sm_relate(&client->sm, &send->sm);
 	rv = uvClientSend(client, send);
 	if (rv != 0) {
 		goto err_after_send_alloc;
