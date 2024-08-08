@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "../lib/sm.h" /* struct sm */
 #include "../raft.h"
 #include "assert.h"
 #include "heap.h"
@@ -48,6 +49,56 @@ struct uvClient
 	bool closing;                   /* True after calling uvClientAbort */
 };
 
+enum {
+	SEND_START,
+	SEND_PENDING,
+	SEND_WRITING,
+	SEND_DONEWRITING,
+	SEND_DONE,
+	SEND_FAIL,
+	SEND_NR,
+};
+
+static bool send_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
+static struct sm_conf send_states[SEND_NR] = {
+	[SEND_START] = {
+		.name = "start",
+		.allowed = BITS(SEND_PENDING)
+			  |BITS(SEND_WRITING)
+			  |BITS(SEND_FAIL),
+		.flags = SM_INITIAL,
+	},
+	[SEND_PENDING] = {
+		.name = "pending",
+		.allowed = BITS(SEND_WRITING)
+			  |BITS(SEND_FAIL),
+	},
+	[SEND_WRITING] = {
+		.name = "writing",
+		.allowed = BITS(SEND_DONEWRITING)
+			  |BITS(SEND_FAIL),
+	},
+	[SEND_DONEWRITING] = {
+		.name = "donewriting",
+		.allowed = BITS(SEND_DONE)
+			  |BITS(SEND_FAIL),
+	},
+	[SEND_DONE] = {
+		.name = "done",
+		.flags = SM_FINAL,
+	},
+	[SEND_FAIL] = {
+		.name = "fail",
+		.flags = SM_FINAL|SM_FAILURE,
+	},
+};
+
 /* Hold state for a single send RPC message request. */
 struct uvSend
 {
@@ -56,13 +107,20 @@ struct uvSend
 	uv_buf_t *bufs;           /* Encoded raft RPC message to send */
 	unsigned n_bufs;          /* Number of buffers */
 	uv_write_t write;         /* Stream write request */
+	struct sm sm;
 	queue queue;              /* Pending send requests queue */
 };
 
 /* Free all memory used by the given send request object, including the object
  * itself. */
-static void uvSendDestroy(struct uvSend *s)
+static void uvSendDestroy(struct uvSend *s, int status)
 {
+	if (status == 0) {
+		sm_move(&s->sm, SEND_DONE);
+	} else {
+		sm_fail(&s->sm, SEND_FAIL, status);
+	}
+	sm_fini(&s->sm);
 	if (s->bufs != NULL) {
 		/* Just release the first buffer. Further buffers are entry or
 		 * snapshot payloads, which we were passed but we don't own. */
@@ -127,7 +185,7 @@ static void uvClientMaybeDestroy(struct uvClient *c)
 		send = QUEUE_DATA(head, struct uvSend, queue);
 		queue_remove(head);
 		req = send->req;
-		uvSendDestroy(send);
+		uvSendDestroy(send, RAFT_CANCELED);
 		if (req->cb != NULL) {
 			req->cb(req, RAFT_CANCELED);
 		}
@@ -179,6 +237,8 @@ static void uvSendWriteCb(struct uv_write_s *write, const int status)
 	struct raft_io_send *req = send->req;
 	int cb_status = 0;
 
+	sm_move(&send->sm, SEND_DONEWRITING);
+
 	/* If the write failed and we're not currently closing, let's consider
 	 * the current stream handle as busted and start disconnecting (unless
 	 * we're already doing so). We'll trigger a new connection attempt once
@@ -194,7 +254,7 @@ static void uvSendWriteCb(struct uv_write_s *write, const int status)
 		}
 	}
 
-	uvSendDestroy(send);
+	uvSendDestroy(send, status);
 
 	if (req->cb != NULL) {
 		req->cb(req, cb_status);
@@ -210,9 +270,12 @@ static int uvClientSend(struct uvClient *c, struct uvSend *send)
 	/* If there's no connection available, let's queue the request. */
 	if (c->stream == NULL) {
 		tracef("no connection available -> enqueue message");
+		sm_move(&send->sm, SEND_PENDING);
 		queue_insert_tail(&c->pending, &send->queue);
 		return 0;
 	}
+
+	sm_move(&send->sm, SEND_WRITING);
 
 	tracef("connection available -> write message");
 	send->write.data = send;
@@ -245,7 +308,7 @@ static void uvClientSendPending(struct uvClient *c)
 			if (send->req->cb != NULL) {
 				send->req->cb(send->req, rv);
 			}
-			uvSendDestroy(send);
+			uvSendDestroy(send, rv);
 		}
 	}
 }
@@ -326,7 +389,7 @@ static void uvClientConnectCb(struct raft_uv_connect *req,
 			old_send = QUEUE_DATA(head, struct uvSend, queue);
 			queue_remove(head);
 			old_req = old_send->req;
-			uvSendDestroy(old_send);
+			uvSendDestroy(old_send, RAFT_NOCONNECTION);
 			if (old_req->cb != NULL) {
 				old_req->cb(old_req, RAFT_NOCONNECTION);
 			}
@@ -475,6 +538,9 @@ int UvSend(struct raft_io *io,
 	}
 	send->req = req;
 	req->cb = cb;
+	sm_init(&send->sm, send_invariant, NULL, send_states, "send", SEND_START);
+	sm_attr(&send->sm, "targ-id", "%llu", message->server_id);
+	sm_attr(&send->sm, "targ-addr", "%s", message->server_address);
 
 	rv = uvEncodeMessage(message, &send->bufs, &send->n_bufs);
 	if (rv != 0) {
@@ -498,7 +564,7 @@ int UvSend(struct raft_io *io,
 	return 0;
 
 err_after_send_alloc:
-	uvSendDestroy(send);
+	uvSendDestroy(send, rv);
 err:
 	assert(rv != 0);
 	return rv;
