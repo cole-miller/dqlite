@@ -34,6 +34,64 @@
 /* Maximum number of requests that can be buffered.  */
 #define UV__CLIENT_MAX_PENDING 3
 
+enum {
+	CLIENT_INIT,
+	CLIENT_COUNTDOWN,
+	CLIENT_CONNECTING,
+	CLIENT_CONNECTED,
+	CLIENT_DISCONNECTING,
+	CLIENT_DISCONNECTED,
+	CLIENT_FINI,
+	CLIENT_NR,
+};
+
+static bool client_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
+static struct sm_conf client_states[CLIENT_NR] = {
+	[CLIENT_INIT] = {
+		.name = "init",
+		.allowed = BITS(CLIENT_CONNECTING)
+			  |BITS(CLIENT_COUNTDOWN),
+		.flags = SM_INITIAL,
+	},
+	[CLIENT_COUNTDOWN] = {
+		.name = "countdown",
+		.allowed = BITS(CLIENT_CONNECTING)
+			  |BITS(CLIENT_COUNTDOWN)
+			  |BITS(CLIENT_FINI),
+	},
+	[CLIENT_CONNECTING] = {
+		.name = "connecting",
+		.allowed = BITS(CLIENT_DISCONNECTING)
+			  |BITS(CLIENT_FINI)
+			  |BITS(CLIENT_CONNECTED)
+			  |BITS(CLIENT_COUNTDOWN),
+	},
+	[CLIENT_CONNECTED] = {
+		.name = "connected",
+		.allowed = BITS(CLIENT_DISCONNECTING),
+	},
+	[CLIENT_DISCONNECTING] = {
+		.name = "disconnecting",
+		.allowed = BITS(CLIENT_DISCONNECTED),
+	},
+	[CLIENT_DISCONNECTED] = {
+		.name = "disconnected",
+		.allowed = BITS(CLIENT_FINI)
+			  |BITS(CLIENT_CONNECTING)
+			  |BITS(CLIENT_COUNTDOWN),
+	},
+	[CLIENT_FINI] = {
+		.name = "fini",
+		.flags = SM_FINAL,
+	},
+};
+
 struct uvClient
 {
 	struct uv *uv;                  /* libuv I/O implementation object */
@@ -47,6 +105,7 @@ struct uvClient
 	queue pending;                  /* Pending send message requests */
 	queue queue;                    /* Clients queue */
 	bool closing;                   /* True after calling uvClientAbort */
+	struct sm sm;
 };
 
 enum {
@@ -155,6 +214,7 @@ static int uvClientInit(struct uvClient *c,
 	strcpy(c->address, address);
 	queue_init(&c->pending);
 	c->closing = false;
+	sm_init(&c->sm, client_invariant, NULL, client_states, "client", CLIENT_INIT);
 	queue_insert_tail(&uv->clients, &c->queue);
 	return 0;
 }
@@ -193,6 +253,8 @@ static void uvClientMaybeDestroy(struct uvClient *c)
 
 	queue_remove(&c->queue);
 
+	sm_move(&c->sm, CLIENT_FINI);
+	sm_fini(&c->sm);
 	assert(c->address != NULL);
 	RaftHeapFree(c->address);
 	RaftHeapFree(c);
@@ -211,6 +273,7 @@ static void uvClientDisconnectCloseCb(struct uv_handle_s *handle)
 	assert(handle == (struct uv_handle_s *)c->old_stream);
 	RaftHeapFree(c->old_stream);
 	c->old_stream = NULL;
+	sm_move(&c->sm, CLIENT_DISCONNECTED);
 	if (c->closing) {
 		uvClientMaybeDestroy(c);
 	} else {
@@ -225,6 +288,7 @@ static void uvClientDisconnect(struct uvClient *c)
 	assert(c->old_stream == NULL);
 	c->old_stream = c->stream;
 	c->stream = NULL;
+	sm_move(&c->sm, CLIENT_DISCONNECTING);
 	uv_close((struct uv_handle_s *)c->old_stream,
 		 uvClientDisconnectCloseCb);
 }
@@ -372,6 +436,7 @@ static void uvClientConnectCb(struct raft_uv_connect *req,
 		c->stream = stream;
 		c->n_connect_attempt = 0;
 		c->stream->data = c;
+		sm_move(&c->sm, CLIENT_CONNECTED);
 		uvClientSendPending(c);
 		return;
 	}
@@ -395,6 +460,8 @@ static void uvClientConnectCb(struct raft_uv_connect *req,
 			}
 		}
 	}
+
+	sm_move(&c->sm, CLIENT_COUNTDOWN);
 
 	/* Let's schedule another attempt. */
 	rv = uv_timer_start(&c->timer, uvClientTimerCb,
@@ -420,10 +487,13 @@ static void uvClientConnect(struct uvClient *c)
 				       c->address, uvClientConnectCb);
 	if (rv != 0) {
 		/* Restart the timer, so we can retry. */
+		sm_move(&c->sm, CLIENT_COUNTDOWN);
 		c->connect.data = NULL;
 		rv = uv_timer_start(&c->timer, uvClientTimerCb,
 				    c->uv->connect_retry_delay, 0);
 		assert(rv == 0);
+	} else {
+		sm_move(&c->sm, CLIENT_CONNECTING);
 	}
 }
 
