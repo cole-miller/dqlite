@@ -36,14 +36,6 @@ static int ioFsmVersionCheck(struct raft *r,
 			     struct raft_io *io,
 			     struct raft_fsm *fsm);
 
-enum {
-	ROLE_NONE = 17,
-	ROLE_FOLLOWER = RAFT_FOLLOWER,
-	ROLE_CANDIDATE = RAFT_CANDIDATE,
-	ROLE_LEADER = RAFT_LEADER,
-	ROLE_NR = SM_STATES_MAX,
-};
-
 static bool role_invariant(const struct sm *sm, int prev)
 {
 	(void)sm;
@@ -51,23 +43,23 @@ static bool role_invariant(const struct sm *sm, int prev)
 	return true;
 }
 
-static struct sm_conf role_states[ROLE_NR] = {
-	[ROLE_NONE] = {
-		.name = "none",
+static struct sm_conf role_states[SM_STATES_MAX] = {
+	[RAFT_UNAVAILABLE] = {
+		.name = "unavailable",
 		.allowed = ~0ULL,
 		.flags = ~0U,
 	},
-	[ROLE_FOLLOWER] = {
+	[RAFT_FOLLOWER] = {
 		.name = "follower",
 		.allowed = ~0ULL,
 		.flags = ~0U,
 	},
-	[ROLE_CANDIDATE] = {
+	[RAFT_CANDIDATE] = {
 		.name = "candidate",
 		.allowed = ~0ULL,
 		.flags = ~0U,
 	},
-	[ROLE_LEADER] = {
+	[RAFT_LEADER] = {
 		.name = "leader",
 		.allowed = ~0ULL,
 		.flags = ~0U,
@@ -82,8 +74,6 @@ int raft_init(struct raft *r,
 {
 	int rv;
 	assert(r != NULL);
-
-	sm_init(&r->role_sm, role_invariant, NULL, role_states, "role", ROLE_NONE);
 
 	rv = ioFsmVersionCheck(r, io, fsm);
 	if (rv != 0) {
@@ -122,6 +112,7 @@ int raft_init(struct raft *r,
 	r->commit_index = 0;
 	r->last_applied = 0;
 	r->last_stored = 0;
+	sm_init(&r->role_sm, role_invariant, NULL, role_states, "role", RAFT_UNAVAILABLE);
 	r->state = RAFT_UNAVAILABLE;
 	r->leader_state.voter_contacts = 0;
 	rv = raftInitCallbacks(r);

@@ -17,7 +17,6 @@
 
 enum {
 	QUERY_START,
-	QUERY_PREPARED,
 	QUERY_BARRIER,
 	QUERY_BATCHSTART,
 	QUERY_BATCHEND,
@@ -39,10 +38,6 @@ static struct sm_conf query_states[QUERY_NR] = {
 		.allowed = ~0ULL,
 		.flags = SM_INITIAL,
 	},
-	[QUERY_PREPARED] = {
-		.name = "prepared",
-		.allowed = ~0ULL,
-	},	
 	[QUERY_BARRIER] = {
 		.name = "barrier",
 		.allowed = ~0ULL,
@@ -245,6 +240,10 @@ static void failure(struct handle *req, int code, const char *message)
 	struct response_failure failure;
 	size_t n;
 	char *cursor;
+	if (req->type == DQLITE_REQUEST_QUERY || req->type == DQLITE_REQUEST_QUERY_SQL) {
+		sm_fail(&req->sm, QUERY_FAIL, code ? code : 1);
+		sm_fini(&req->sm);
+	}
 	failure.code = (uint64_t)code;
 	failure.message = message;
 	n = response_failure__sizeof(&failure);
@@ -597,7 +596,6 @@ static void query_batch_async(struct handle *req, enum pool_half half)
 
 	if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
 		assert(g->leader != NULL);
-		sm_fail(&req->sm, QUERY_FAIL, rc);
 		failure(req, rc, sqlite3_errmsg(g->leader->conn));
 		sqlite3_reset(stmt);
 		goto done;
@@ -669,7 +667,6 @@ static void query_barrier_cb(struct barrier *barrier, int status)
 	sm_move(&req->sm, QUERY_BARRIER);
 
 	if (status != 0) {
-		sm_fail(&req->sm, QUERY_FAIL, status);
 		failure(req, status, "barrier error");
 		return;
 	}
@@ -739,14 +736,11 @@ static int handle_query(struct gateway *g, struct handle *req)
 	rv = bind__params(stmt->stmt, cursor, tuple_format);
 	if (rv != 0) {
 		tracef("handle query bind failed %d", rv);
-		sm_fail(&req->sm, QUERY_FAIL, rv);
 		failure(req, rv, "bind parameters");
 		return 0;
 	}
 	req->stmt_id = stmt->id;
 	g->req = req;
-
-	sm_move(&req->sm, QUERY_PREPARED);
 
 	is_readonly = (bool)sqlite3_stmt_readonly(stmt->stmt);
 	if (is_readonly) {
@@ -967,6 +961,8 @@ static void querySqlBarrierCb(struct barrier *barrier, int status)
 	uint64_t req_id;
 	int rv;
 
+	sm_move(&req->sm, QUERY_BARRIER);
+
 	if (status != 0) {
 		failure(req, status, "barrier error");
 		return;
@@ -1048,6 +1044,9 @@ static int handle_query_sql(struct gateway *g, struct handle *req)
 	if (rv != 0) {
 		return rv;
 	}
+
+	req->sm = (struct sm){};
+	sm_init(&req->sm, query_invariant, NULL, query_states, "query", QUERY_START);
 
 	CHECK_LEADER(req);
 	LOOKUP_DB(request.db_id);

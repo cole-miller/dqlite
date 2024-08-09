@@ -83,6 +83,7 @@ static int tickCandidate(struct raft *r)
 	 */
 	if (electionTimerExpired(r)) {
 		tracef("start new election");
+		sm_move(&r->role_sm, RAFT_CANDIDATE);
 		return electionStart(r);
 	}
 
