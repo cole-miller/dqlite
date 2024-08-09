@@ -9,6 +9,7 @@
 
 #include "lib/buffer.h"
 #include "lib/serialize.h"
+#include "lib/sm.h"
 
 #include "config.h"
 #include "id.h"
@@ -108,6 +109,7 @@ struct handle {
 	pool_work_t work;
 	/* Gateway the handle belongs to. */
 	struct gateway *gw;
+	struct sm sm;
 };
 
 /**

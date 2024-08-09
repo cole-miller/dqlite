@@ -3,6 +3,7 @@
 #include "bind.h"
 #include "conn.h"
 #include "id.h"
+#include "lib/sm.h" /* struct sm */
 #include "lib/threadpool.h"
 #include "protocol.h"
 #include "query.h"
@@ -13,6 +14,58 @@
 #include "translate.h"
 #include "tuple.h"
 #include "vfs.h"
+
+enum {
+	QUERY_START,
+	QUERY_PREPARED,
+	QUERY_BARRIER,
+	QUERY_BATCHSTART,
+	QUERY_BATCHEND,
+	QUERY_DONE,
+	QUERY_FAIL,
+	QUERY_NR,
+};
+
+static bool query_invariant(const struct sm *sm, int prev)
+{
+	(void)sm;
+	(void)prev;
+	return true;
+}
+
+static struct sm_conf query_states[QUERY_NR] = {
+	[QUERY_START] = {
+		.name = "start",
+		.allowed = ~0ULL,
+		.flags = SM_INITIAL,
+	},
+	[QUERY_PREPARED] = {
+		.name = "prepared",
+		.allowed = ~0ULL,
+	},	
+	[QUERY_BARRIER] = {
+		.name = "barrier",
+		.allowed = ~0ULL,
+	},
+	[QUERY_BATCHSTART] = {
+		.name = "batchstart",
+		.allowed = ~0ULL,
+	},
+	[QUERY_BATCHEND] = {
+		.name = "batchend",
+		.allowed = ~0ULL,
+	},
+	[QUERY_DONE] = {
+		.name = "done",
+		.allowed = ~0ULL,
+		.flags = SM_FINAL,
+	},
+	[QUERY_FAIL] = {
+		.name = "fail",
+		.allowed = ~0ULL,
+		.flags = SM_FINAL|SM_FAILURE,
+	},
+};
 
 void gateway__init(struct gateway *g,
 		   struct config *config,
@@ -535,13 +588,16 @@ static void query_batch_async(struct handle *req, enum pool_half half)
 	int rc;
 
 	if (half == POOL_TOP_HALF) {
+		sm_move(&req->sm, QUERY_BATCHSTART);
 		req->work.rc = query__batch(stmt, req->buffer);
 		return;
 	}  /* else POOL_BOTTOM_HALF => */
 	rc = req->work.rc;
+	sm_move(&req->sm, QUERY_BATCHEND);
 
 	if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
 		assert(g->leader != NULL);
+		sm_fail(&req->sm, QUERY_FAIL, rc);
 		failure(req, rc, sqlite3_errmsg(g->leader->conn));
 		sqlite3_reset(stmt);
 		goto done;
@@ -553,6 +609,8 @@ static void query_batch_async(struct handle *req, enum pool_half half)
 		SUCCESS_V0(rows, ROWS);
 		return;
 	} else {
+		sm_move(&req->sm, QUERY_DONE);
+		sm_fini(&req->sm);
 		response.eof = DQLITE_RESPONSE_ROWS_DONE;
 		SUCCESS_V0(rows, ROWS);
 	}
@@ -608,7 +666,10 @@ static void query_barrier_cb(struct barrier *barrier, int status)
 	struct stmt *stmt = stmt__registry_get(&g->stmts, req->stmt_id);
 	assert(stmt != NULL);
 
+	sm_move(&req->sm, QUERY_BARRIER);
+
 	if (status != 0) {
+		sm_fail(&req->sm, QUERY_FAIL, status);
 		failure(req, status, "barrier error");
 		return;
 	}
@@ -671,14 +732,21 @@ static int handle_query(struct gateway *g, struct handle *req)
 	LOOKUP_DB(request.db_id);
 	LOOKUP_STMT(request.stmt_id);
 	FAIL_IF_CHECKPOINTING;
+
+	req->sm = (struct sm){};
+	sm_init(&req->sm, query_invariant, NULL, query_states, "query", QUERY_START);
+
 	rv = bind__params(stmt->stmt, cursor, tuple_format);
 	if (rv != 0) {
 		tracef("handle query bind failed %d", rv);
+		sm_fail(&req->sm, QUERY_FAIL, rv);
 		failure(req, rv, "bind parameters");
 		return 0;
 	}
 	req->stmt_id = stmt->id;
 	g->req = req;
+
+	sm_move(&req->sm, QUERY_PREPARED);
 
 	is_readonly = (bool)sqlite3_stmt_readonly(stmt->stmt);
 	if (is_readonly) {
