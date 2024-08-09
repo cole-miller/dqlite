@@ -813,6 +813,8 @@ struct raft
 	raft_id id;                 /* Server ID of this raft instance. */
 	char *address;              /* Server address of this raft instance. */
 
+	struct sm role_sm;
+
 	/*
 	 * Cache of the server's persistent state, updated on stable storage
 	 * before responding to RPCs (Figure 3.1).
