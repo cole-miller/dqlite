@@ -17,6 +17,8 @@
  * is valid. */
 static void convertSetState(struct raft *r, unsigned short new_state)
 {
+	sm_move(&r->role_sm, new_state);
+
 	/* Check that the transition is legal, see Figure 3.3. Note that with
 	 * respect to the paper we have an additional "unavailable" state, which
 	 * is the initial or final state. */
