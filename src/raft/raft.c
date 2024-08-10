@@ -82,6 +82,7 @@ int raft_init(struct raft *r,
 	r->commit_index = 0;
 	r->last_applied = 0;
 	r->last_stored = 0;
+	r->apply_in_progress = false;
 	r->state = RAFT_UNAVAILABLE;
 	r->leader_state.voter_contacts = 0;
 	rv = raftInitCallbacks(r);

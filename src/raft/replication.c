@@ -1729,6 +1729,71 @@ abort:
 	return rv;
 }
 
+void replication_apply_schedule(struct raft *r);
+
+void replication_apply_one(void *p)
+{
+	struct raft *r = p;
+	PRE(r->apply_in_progress);
+	PRE(r->last_applied < r->commit_index);
+	raft_index next = r->last_applied + 1;
+
+	const struct raft_entry *entry = logGet(r->log, next);
+	if (entry == NULL) {
+		/* This can happen while installing a snapshot. */
+		tracef("replicationApply - ENTRY NULL");
+		return;
+	}
+
+	int rv;
+	switch (entry->type) {
+		case RAFT_COMMAND:
+			rv = applyCommand(r, next, &entry->buf);
+			break;
+		case RAFT_BARRIER:
+			applyBarrier(r, next);
+			rv = 0;
+			break;
+		case RAFT_CHANGE:
+			applyChange(r, next);
+			rv = 0;
+			break;
+		default:
+			assert(0);
+	}
+	(void)rv;
+
+	POST(r->last_applied == next);
+	if (r->last_applied < r->commit_index) {
+		replication_apply_schedule(r);
+	} else if (shouldTakeSnapshot(r)) {
+		r->apply_in_progress = false;
+		rv = takeSnapshot(r);
+		(void)rv;
+	}
+}
+
+void replication_apply_schedule(struct raft *r)
+{
+	PRE(!r->apply_in_progress);
+	r->apply_in_progress = true;
+	r->io->run_soon(r->io, replication_apply_one, r);
+}
+
+void replication_apply(struct raft *r)
+{
+	PRE(r->last_applied <= r->commit_index);
+	if (r->last_applied == r->commit_index) {
+		return;
+	}
+
+	if (r->apply_in_progress) {
+		return;
+	}
+
+	replication_apply_schedule(r);
+}
+
 int replicationApply(struct raft *r)
 {
 	raft_index index;

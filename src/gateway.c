@@ -295,7 +295,7 @@ static int handle_open(struct gateway *g, struct handle *req)
 		tracef("malloc failed");
 		return DQLITE_NOMEM;
 	}
-	rc = leader__init(g->leader, db, g->raft);
+	rc = leader__init(g->leader, db, g->loop, g->raft);
 	if (rc != 0) {
 		tracef("leader init failed %d", rc);
 		sqlite3_free(g->leader);

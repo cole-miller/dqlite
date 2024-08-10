@@ -125,6 +125,9 @@ static int uvInit(struct raft_io *io, raft_id id, const char *address)
 	assert(rv == 0); /* This should never fail */
 	uv->timer.data = uv;
 
+	uv_timer_init(uv->loop, &uv->sched);
+	uv->sched.data = uv;
+
 	return 0;
 }
 
@@ -167,6 +170,9 @@ void uvMaybeFireCloseCb(struct uv *uv)
 	}
 
 	if (uv->transport->data != NULL) {
+		return;
+	}
+	if (uv->sched.data != NULL) {
 		return;
 	}
 	if (uv->timer.data != NULL) {
@@ -215,6 +221,14 @@ static void uvTickTimerCloseCb(uv_handle_t *handle)
 	uvMaybeFireCloseCb(uv);
 }
 
+static void sched_close_cb(uv_handle_t *sched)
+{
+	struct uv *uv = sched->data;
+	PRE(uv->closing);
+	uv->sched.data = NULL;
+	uvMaybeFireCloseCb(uv);
+}
+
 static void uvTransportCloseCb(struct raft_uv_transport *transport)
 {
 	struct uv *uv = transport->data;
@@ -237,6 +251,9 @@ static void uvClose(struct raft_io *io, raft_io_close_cb cb)
 	uvAppendClose(uv);
 	if (uv->transport->data != NULL) {
 		uv->transport->close(uv->transport, uvTransportCloseCb);
+	}
+	if (uv->sched.data != NULL) {
+		uv_close((uv_handle_t *)&uv->sched, sched_close_cb);
 	}
 	if (uv->timer.data != NULL) {
 		uv_close((uv_handle_t *)&uv->timer, uvTickTimerCloseCb);
@@ -641,6 +658,27 @@ static void uvSeedRand(struct uv *uv)
 	srand(seed);
 }
 
+static void run_soon_timer_cb(uv_timer_t *t)
+{
+	struct uv *uv = t->data;
+	PRE(uv->run_soon_cb != NULL);
+	uv->run_soon_cb(uv->run_soon_data);
+	uv->run_soon_cb = NULL;
+	uv->run_soon_data = NULL;
+}
+
+/**
+ * Implementation of raft_io->run_soon.
+ */
+static void run_soon(struct raft_io *io, void (*cb)(void *), void *data)
+{
+	struct uv *uv = io->data;
+	PRE(uv->run_soon_cb == NULL);
+	uv->run_soon_cb = cb;
+	uv->run_soon_data = data;
+	uv_timer_start(&uv->sched, run_soon_timer_cb, 0, 0);
+}
+
 int raft_uv_init(struct raft_io *io,
 		 struct uv_loop_s *loop,
 		 const char *dir,
@@ -723,6 +761,8 @@ int raft_uv_init(struct raft_io *io,
 	uv->closing = false;
 	uv->close_cb = NULL;
 	uv->auto_recovery = true;
+	uv->run_soon_cb = NULL;
+	uv->run_soon_data = NULL;
 
 	uvSeedRand(uv);
 
@@ -745,6 +785,7 @@ int raft_uv_init(struct raft_io *io,
 	io->async_work = UvAsyncWork;
 	io->time = uvTime;
 	io->random = uvRandom;
+	io->run_soon = run_soon;
 
 	return 0;
 

@@ -701,6 +701,9 @@ struct raft_io
 	int (*async_work)(struct raft_io *io,
 			  struct raft_io_async_work *req,
 			  raft_io_async_work_cb cb);
+	void (*run_soon)(struct raft_io *io,
+			 void (*cb)(void *),
+			 void *data);
 };
 
 /**
@@ -910,6 +913,8 @@ struct raft
 	raft_index commit_index; /* Highest log entry known to be committed */
 	raft_index last_applied; /* Highest log entry applied to the FSM */
 	raft_index last_stored;  /* Highest log entry persisted on disk */
+
+	bool apply_in_progress;
 
 	/*
 	 * Current server state of this raft instance, along with a union

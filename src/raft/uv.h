@@ -95,6 +95,9 @@ struct uv
 	bool closing;              /* True if we are closing */
 	raft_io_close_cb close_cb; /* Invoked when finishing closing */
 	bool auto_recovery;        /* Try to recover from corrupt segments */
+	uv_timer_t sched;
+	void (*run_soon_cb)(void *);
+	void *run_soon_data;
 };
 
 /* Implementation of raft_io->truncate. */
