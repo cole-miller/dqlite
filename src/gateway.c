@@ -792,7 +792,9 @@ static void handle_exec_sql_next(struct gateway *g,
 	/* At this point, leader__exec takes ownership of stmt */
 	rv =
 	    leader__exec(g->leader, &g->exec, stmt, req_id, handle_exec_sql_cb);
+	sm_relate(&g->raft->role_sm, &g->exec.sm);
 	if (rv != SQLITE_OK) {
+		sm_fini(&g->exec.sm);
 		failure(req, rv, sqlite3_errmsg(g->leader->conn));
 		goto done_after_prepare;
 	}

@@ -529,8 +529,11 @@ int leader__exec(struct leader *l,
 {
 	tracef("leader exec id:%" PRIu64, id);
 	int rv;
+	sm_init(&req->sm, exec_invariant, NULL, exec_states, "exec",
+		EXEC_START);
 	if (l->exec != NULL) {
 		tracef("busy");
+		sm_fail(&req->sm, EXEC_FAILED, SQLITE_BUSY);
 		return SQLITE_BUSY;
 	}
 	l->exec = req;
@@ -542,12 +545,11 @@ int leader__exec(struct leader *l,
 	req->barrier.data = req;
 	req->barrier.cb = NULL;
 	req->work = (pool_work_t){};
-	sm_init(&req->sm, exec_invariant, NULL, exec_states, "exec",
-		EXEC_START);
 
 	rv = leader__barrier(l, &req->barrier, execBarrierCb);
 	if (rv != 0) {
 		l->exec = NULL;
+		sm_fail(&req->sm, EXEC_FAILED, rv);
 		return rv;
 	}
 	return 0;
