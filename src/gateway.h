@@ -24,6 +24,7 @@ struct handle;
  * SQLite.
  */
 struct gateway {
+	uv_loop_t *loop;
 	struct config *config;       /* Configuration */
 	struct registry *registry;   /* Register of existing databases */
 	struct raft *raft;           /* Raft instance */
@@ -38,6 +39,7 @@ struct gateway {
 };
 
 void gateway__init(struct gateway *g,
+		   uv_loop_t *loop,
 		   struct config *config,
 		   struct registry *registry,
 		   struct raft *raft,

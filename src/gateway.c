@@ -15,12 +15,14 @@
 #include "vfs.h"
 
 void gateway__init(struct gateway *g,
+		   uv_loop_t *loop,
 		   struct config *config,
 		   struct registry *registry,
 		   struct raft *raft,
 		   struct id_state seed)
 {
 	tracef("gateway init");
+	g->loop = loop;
 	g->config = config;
 	g->registry = registry;
 	g->raft = raft;
@@ -793,6 +795,7 @@ static void handle_exec_sql_next(struct gateway *g,
 	rv =
 	    leader__exec(g->leader, &g->exec, stmt, req_id, handle_exec_sql_cb);
 	sm_relate(&g->raft->role_sm, &g->exec.sm);
+	sm_attr(&g->exec.sm, "idle", "%llu", uv_metrics_idle_time(g->loop));
 	if (rv != SQLITE_OK) {
 		sm_fini(&g->exec.sm);
 		failure(req, rv, sqlite3_errmsg(g->leader->conn));

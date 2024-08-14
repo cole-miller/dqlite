@@ -94,6 +94,7 @@ int dqlite__init(struct dqlite_node *d,
 		rv = DQLITE_ERROR;
 		goto err_after_vfs_init;
 	}
+	uv_loop_configure(&d->loop, UV_METRICS_IDLE_TIME);
 #ifdef DQLITE_NEXT
 	rv = pool_init(&d->pool, &d->loop, d->config.pool_thread_count,
 		       POOL_QOS_PRIO_FAIR);
