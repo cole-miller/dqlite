@@ -275,9 +275,9 @@ raft_core_fuzzy_test_LDADD = libtest.la libraft.la
 
 raft_uv_unit_test_SOURCES = \
   src/tracing.c \
+  src/raft/aio.c \
   src/raft/err.c \
   src/raft/heap.c \
-  src/raft/syscall.c \
   src/raft/uv_fs.c \
   src/raft/uv_os.c \
   src/raft/uv_writer.c \

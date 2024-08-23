@@ -1,4 +1,5 @@
 #include "../../../src/raft/uv_fs.h"
+#include "../../../src/raft/uv_os.h"
 #include "../../../src/raft/uv_writer.h"
 #include "../lib/aio.h"
 #include "../lib/dir.h"
