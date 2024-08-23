@@ -43,17 +43,6 @@ int UvOsIoDestroy(raft_aio_context *ctx)
 	return 0;
 }
 
-int UvOsIoSubmit(raft_aio_context *ctx, long nr, struct iocb **iocbpp)
-{
-	int rv;
-	rv = (int)syscall(__NR_io_submit, ctx->inner, nr, iocbpp);
-	if (rv == -1) {
-		return -errno;
-	}
-	assert(rv == nr); /* TODO: can something else be returned? */
-	return 0;
-}
-
 int raft_aio_pwrite(raft_aio_context *ctx, int fd,
 		    void *buf, size_t len, off_t off,
 		    int rw_flags, int resfd, void *data)
