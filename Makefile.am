@@ -74,6 +74,7 @@ libdqlite_la_SOURCES = $(basic_dqlite_sources)
 
 if BUILD_RAFT_ENABLED
 libraft_la_SOURCES = \
+  src/raft/aio.c \
   src/raft/byte.c \
   src/raft/callbacks.c \
   src/raft/client.c \
