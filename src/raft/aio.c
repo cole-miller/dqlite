@@ -1,10 +1,14 @@
+#include <errno.h>
+#include <sys/syscall.h> /* _NR_* */
+#include <unistd.h> /* syscall */
+
 #include "aio.h"
-#include "syscall.h"
+#include "assert.h"
 
 int UvOsIoSetup(unsigned nr, aio_context_t *ctxp)
 {
 	int rv;
-	rv = io_setup(nr, ctxp);
+	rv = (int)syscall(__NR_io_setup, nr, ctxp);
 	if (rv == -1) {
 		return -errno;
 	}
@@ -14,7 +18,7 @@ int UvOsIoSetup(unsigned nr, aio_context_t *ctxp)
 int UvOsIoDestroy(aio_context_t ctx)
 {
 	int rv;
-	rv = io_destroy(ctx);
+	rv = (int)syscall(__NR_io_destroy, ctx);
 	if (rv == -1) {
 		return -errno;
 	}
@@ -24,7 +28,7 @@ int UvOsIoDestroy(aio_context_t ctx)
 int UvOsIoSubmit(aio_context_t ctx, long nr, struct iocb **iocbpp)
 {
 	int rv;
-	rv = io_submit(ctx, nr, iocbpp);
+	rv = (int)syscall(__NR_io_submit, ctx, nr, iocbpp);
 	if (rv == -1) {
 		return -errno;
 	}
@@ -40,7 +44,8 @@ int UvOsIoGetevents(aio_context_t ctx,
 {
 	int rv;
 	do {
-		rv = io_getevents(ctx, min_nr, max_nr, events, timeout);
+		rv = (int)syscall(__NR_io_getevents, ctx,
+				  min_nr, max_nr, events, timeout);
 	} while (rv == -1 && errno == EINTR);
 
 	if (rv == -1) {

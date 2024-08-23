@@ -103,7 +103,6 @@ libraft_la_SOURCES = \
   src/raft/snapshot.c \
   src/raft/start.c \
   src/raft/state.c \
-  src/raft/syscall.c \
   src/raft/tick.c \
   src/raft/uv.c \
   src/raft/uv_append.c \
