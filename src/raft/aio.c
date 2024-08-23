@@ -54,6 +54,36 @@ int UvOsIoSubmit(raft_aio_context *ctx, long nr, struct iocb **iocbpp)
 	return 0;
 }
 
+int raft_aio_pwrite(raft_aio_context *ctx, int fd,
+		    void *buf, size_t len, off_t off,
+		    int rw_flags, int resfd, void *data)
+{
+	struct iocb *iocb;
+	int rv;
+
+	iocb = raft_calloc(1, sizeof(*iocb));
+	if (iocb == NULL) {
+		return -ENOMEM;
+	}
+	iocb->aio_lio_opcode = IOCB_CMD_PWRITE;
+	iocb->aio_fildes = (uint32_t)fd;
+	iocb->aio_buf = (uint64_t)buf;
+	iocb->aio_nbytes = len;
+	iocb->aio_offset = off;
+	iocb->aio_rw_flags = rw_flags;
+	iocb->aio_flags = resfd == -1 ? 0 : IOCB_FLAG_RESFD;
+	iocb->aio_resfd = (uint32_t)resfd;
+	iocb->aio_data = (uint64_t)data;
+	iocb->aio_reqprio = 0;
+
+	rv = (int)syscall(__NR_io_submit, ctx->inner, 1, &iocb);
+	if (rv == -1) {
+		raft_free(iocb);
+		return -errno;
+	}
+	return 0;
+}
+
 int UvOsIoGetevents(raft_aio_context *ctx,
 		    long min_nr,
 		    long max_nr,
