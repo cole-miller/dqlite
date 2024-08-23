@@ -83,77 +83,67 @@ static void submitCbAssertResult(struct UvWriterReq *req, int status)
     CLOSE_SUBMIT; \
     CLOSE_WAIT
 
-#define MAKE_BUFS(BUFS, N_BUFS, CONTENT)                               \
-    {                                                                  \
-        int __i;                                                       \
-        BUFS = munit_malloc(sizeof *BUFS * N_BUFS);                    \
-        for (__i = 0; __i < N_BUFS; __i++) {                           \
-            uv_buf_t *__buf = &BUFS[__i];                              \
-            __buf->len = f->block_size;                                \
-            __buf->base = aligned_alloc(f->block_size, f->block_size); \
-            munit_assert_ptr_not_null(__buf->base);                    \
-            memset(__buf->base, CONTENT + __i, __buf->len);            \
-        }                                                              \
+#define MAKE_BUF(BUF, CONTENT) \
+    { \
+        BUF = munit_malloc(sizeof(*BUF)); \
+        BUF->len = f->block_size; \
+        BUF->base = aligned_alloc(f->block_size, f->block_size); \
+        munit_assert_ptr_not_null(BUF->base); \
+        memset(BUF->base, (CONTENT), BUF->len); \
     }
 
-#define DESTROY_BUFS(BUFS, N_BUFS)           \
-    {                                        \
-        int __i;                             \
-        for (__i = 0; __i < N_BUFS; __i++) { \
-            free(BUFS[__i].base);            \
-        }                                    \
-        free(BUFS);                          \
+#define DESTROY_BUF(BUF) \
+    { \
+        free(BUF->base); \
+        free(BUF); \
     }
 
-#define WRITE_REQ(N_BUFS, CONTENT, OFFSET, RV, STATUS)             \
-    struct uv_buf_t *_bufs;                                        \
-    struct UvWriterReq _req;                                       \
-    struct result _result = {STATUS, false};                       \
-    int _rv;                                                       \
-    MAKE_BUFS(_bufs, N_BUFS, CONTENT);                             \
-    _req.data = &_result;                                          \
-    _rv = UvWriterSubmit(&f->writer, &_req, _bufs, N_BUFS, OFFSET, \
-                         submitCbAssertResult);                    \
+#define WRITE_REQ(CONTENT, OFFSET, RV, STATUS) \
+    struct uv_buf_t *_buf; \
+    struct UvWriterReq _req; \
+    struct result _result = {STATUS, false}; \
+    int _rv; \
+    MAKE_BUF(_buf, CONTENT); \
+    _req.data = &_result; \
+    _rv = UvWriterSubmit(&f->writer, &_req, *_buf, OFFSET, \
+                         submitCbAssertResult); \
     munit_assert_int(_rv, ==, RV);
 
 /* Submit a write request with the given parameters and wait for the operation
- * to successfully complete. Deallocate BUFS when done.
- *
- * N_BUFS is the number of buffers to allocate and write, each of them will have
- * f->block_size bytes.
+ * to successfully complete. Deallocate the buffer when done.
  *
  * CONTENT must be an unsigned byte value: all bytes of the first buffer will be
  * filled with that value, all bytes of the second buffer will be filled will
  * that value plus one, etc.
  *
  * OFFSET is the offset at which to write the buffers. */
-#define WRITE(N_BUFS, CONTENT, OFFSET)                                  \
-    do {                                                                \
-        WRITE_REQ(N_BUFS, CONTENT, OFFSET, 0 /* rv */, 0 /* status */); \
-        LOOP_RUN_UNTIL(&_result.done);                                  \
-        DESTROY_BUFS(_bufs, N_BUFS);                                    \
+#define WRITE(CONTENT, OFFSET) \
+    do { \
+        WRITE_REQ(CONTENT, OFFSET, 0 /* rv */, 0 /* status */); \
+        LOOP_RUN_UNTIL(&_result.done); \
+        DESTROY_BUF(_buf); \
     } while (0)
 
 /* Submit a write request with the given parameters and wait for the operation
  * to fail with the given code and message. */
-#define WRITE_FAILURE(N_BUFS, CONTENT, OFFSET, STATUS, ERRMSG)  \
-    do {                                                        \
-        WRITE_REQ(N_BUFS, CONTENT, OFFSET, 0 /* rv */, STATUS); \
-        LOOP_RUN_UNTIL(&_result.done);                          \
-        munit_assert_string_equal(f->writer.errmsg, ERRMSG);    \
-        DESTROY_BUFS(_bufs, N_BUFS);                            \
+#define WRITE_FAILURE(CONTENT, OFFSET, STATUS, ERRMSG)  \
+    do { \
+        WRITE_REQ(CONTENT, OFFSET, 0 /* rv */, STATUS); \
+        LOOP_RUN_UNTIL(&_result.done); \
+        munit_assert_string_equal(f->writer.errmsg, ERRMSG); \
+        DESTROY_BUF(_buf); \
     } while (0)
 
 /* Submit a write request with the given parameters, close the writer right
  * after and assert that the request got canceled. */
-#define WRITE_CLOSE(N_BUFS, CONTENT, OFFSET, STATUS)            \
-    do {                                                        \
-        WRITE_REQ(N_BUFS, CONTENT, OFFSET, 0 /* rv */, STATUS); \
-        CLOSE_SUBMIT;                                           \
-        munit_assert_false(_result.done);                       \
-        LOOP_RUN_UNTIL(&_result.done);                          \
-        DESTROY_BUFS(_bufs, N_BUFS);                            \
-        CLOSE_WAIT;                                             \
+#define WRITE_CLOSE(CONTENT, OFFSET, STATUS) \
+    do { \
+        WRITE_REQ(CONTENT, OFFSET, 0 /* rv */, STATUS); \
+        CLOSE_SUBMIT; \
+        munit_assert_false(_result.done); \
+        LOOP_RUN_UNTIL(&_result.done); \
+        DESTROY_BUF(_buf); \
+        CLOSE_WAIT; \
     } while (0)
 
 /* Assert that the content of the test file has the given number of blocks, each
@@ -273,7 +263,7 @@ TEST(UvWriterSubmit, one, setUp, tearDown, 0, DirAllParams)
 {
     struct fixture *f = data;
     SKIP_IF_NO_FIXTURE;
-    WRITE(1 /* n bufs */, 1 /* content */, 0 /* offset */);
+    WRITE(1 /* content */, 0 /* offset */);
     ASSERT_CONTENT(1);
     return MUNIT_OK;
 }
@@ -283,8 +273,8 @@ TEST(UvWriterSubmit, two, setUp, tearDown, 0, DirAllParams)
 {
     struct fixture *f = data;
     SKIP_IF_NO_FIXTURE;
-    WRITE(1 /* n bufs */, 1 /* content */, 0 /* offset */);
-    WRITE(1 /* n bufs */, 2 /* content */, f->block_size /* offset */);
+    WRITE(1 /* content */, 0 /* offset */);
+    WRITE(2 /* content */, f->block_size /* offset */);
     ASSERT_CONTENT(2);
     return MUNIT_OK;
 }
@@ -294,30 +284,9 @@ TEST(UvWriterSubmit, twice, setUp, tearDown, 0, DirAllParams)
 {
     struct fixture *f = data;
     SKIP_IF_NO_FIXTURE;
-    WRITE(1 /* n bufs */, 0 /* content */, 0 /* offset */);
-    WRITE(1 /* n bufs */, 1 /* content */, 0 /* offset */);
+    WRITE(0 /* content */, 0 /* offset */);
+    WRITE(1 /* content */, 0 /* offset */);
     ASSERT_CONTENT(1);
-    return MUNIT_OK;
-}
-
-/* Write a vector of buffers. */
-TEST(UvWriterSubmit, vec, setUp, tearDown, 0, DirAllParams)
-{
-    struct fixture *f = data;
-    SKIP_IF_NO_FIXTURE;
-    WRITE(2 /* n bufs */, 1 /* content */, 0 /* offset */);
-    ASSERT_CONTENT(1);
-    return MUNIT_OK;
-}
-
-/* Write a vector of buffers twice. */
-TEST(UvWriterSubmit, vecTwice, setUp, tearDown, 0, DirAllParams)
-{
-    struct fixture *f = data;
-    SKIP_IF_NO_FIXTURE;
-    WRITE(2 /* n bufs */, 1 /* content */, 0 /* offset */);
-    WRITE(2 /* n bufs */, 1 /* content */, 0 /* offset */);
-    ASSERT_CONTENT(2);
     return MUNIT_OK;
 }
 
@@ -328,7 +297,7 @@ TEST(UvWriterSubmit, beyondEOF, setUp, tearDown, 0, DirAllParams)
     int i;
     SKIP_IF_NO_FIXTURE;
     for (i = 0; i < N_BLOCKS + 1; i++) {
-        WRITE(1 /* n bufs */, i + 1 /* content */,
+        WRITE(i + 1 /* content */,
               i * f->block_size /* offset */);
     }
     ASSERT_CONTENT((N_BLOCKS + 1));
@@ -360,7 +329,7 @@ TEST(UvWriterSubmit, noResources, setUpDeps, tearDown, 0, DirNoAioParams)
     if (rv != 0) {
         return MUNIT_SKIP;
     }
-    WRITE_FAILURE(1, 0, 0, RAFT_TOOMANY, "AIO events user limit exceeded");
+    WRITE_FAILURE(0, 0, RAFT_TOOMANY, "AIO events user limit exceeded");
     AioDestroy(ctx);
     return MUNIT_OK;
 }
@@ -378,7 +347,7 @@ TEST(UvWriterClose, threadpool, setUp, tearDownDeps, 0, DirNoAioParams)
 {
     struct fixture *f = data;
     SKIP_IF_NO_FIXTURE;
-    WRITE_CLOSE(1, 0, 0, 0);
+    WRITE_CLOSE(0, 0, 0);
     return MUNIT_OK;
 }
 
@@ -387,6 +356,6 @@ TEST(UvWriterClose, aio, setUp, tearDownDeps, 0, DirAioParams)
 {
     struct fixture *f = data;
     SKIP_IF_NO_FIXTURE;
-    WRITE_CLOSE(1, 0, 0, RAFT_CANCELED);
+    WRITE_CLOSE(0, 0, RAFT_CANCELED);
     return MUNIT_OK;
 }
