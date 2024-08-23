@@ -6,6 +6,7 @@
 #include "../raft.h"
 #include "assert.h"
 #include "heap.h"
+#include "uv_os.h"
 
 /* Copy the error message from the request object to the writer object. */
 static void uvWriterReqTransferErrMsg(struct UvWriterReq *req)

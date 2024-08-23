@@ -4,10 +4,11 @@
 #define UV_WRITER_H_
 
 #include <stdbool.h>
+#include <uv.h>
 
 #include "err.h"
 #include "../lib/queue.h"
-#include "uv_os.h"
+#include "aio.h"
 
 /* Perform asynchronous writes to a single file. */
 struct UvWriter;

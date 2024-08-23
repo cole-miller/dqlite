@@ -4,7 +4,6 @@
 #define UV_OS_H_
 
 #include <fcntl.h>
-#include <linux/aio_abi.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <uv.h>
@@ -73,15 +72,6 @@ int UvOsRename(const char *path1, const char *path2);
 /* Join dir and filename into a full OS path. */
 int UvOsJoin(const char *dir, const char *filename, char *path);
 
-/* TODO: figure a portable abstraction. */
-int UvOsIoSetup(unsigned nr, aio_context_t *ctxp);
-int UvOsIoDestroy(aio_context_t ctx);
-int UvOsIoSubmit(aio_context_t ctx, long nr, struct iocb **iocbpp);
-int UvOsIoGetevents(aio_context_t ctx,
-		    long min_nr,
-		    long max_nr,
-		    struct io_event *events,
-		    struct timespec *timeout);
 int UvOsEventfd(unsigned int initval, int flags);
 int UvOsSetDirectIo(uv_file fd);
 

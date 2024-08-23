@@ -5,6 +5,7 @@
 #include <sys/vfs.h>
 #include <unistd.h>
 
+#include "aio.h"
 #include "assert.h"
 #include "compress.h"
 #include "err.h"
