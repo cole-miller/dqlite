@@ -250,7 +250,7 @@ SUITE(UvWriterInit)
 TEST(UvWriterInit, noResources, setUpDeps, tearDownDeps, 0, NULL)
 {
     struct fixture *f = data;
-    aio_context_t ctx = 0;
+    raft_aio_context *ctx;
     int rv;
     rv = AioFill(&ctx, 0);
     if (rv != 0) {
@@ -352,7 +352,7 @@ TEST(UvWriterSubmit, concurrentSame, NULL, NULL, 0, DirAllParams)
 TEST(UvWriterSubmit, noResources, setUpDeps, tearDown, 0, DirNoAioParams)
 {
     struct fixture *f = data;
-    aio_context_t ctx = 0;
+    raft_aio_context *ctx;
     int rv;
     SKIP_IF_NO_FIXTURE;
     INIT(2);

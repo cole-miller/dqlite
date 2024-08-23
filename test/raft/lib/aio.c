@@ -7,7 +7,7 @@
 
 #include "munit.h"
 
-int AioFill(aio_context_t *ctx, unsigned n)
+int AioFill(raft_aio_context **ctx, unsigned n)
 {
     char buf[256];
     int fd;
@@ -46,7 +46,7 @@ int AioFill(aio_context_t *ctx, unsigned n)
         return -1;
     }
 
-    rv = syscall(__NR_io_setup, limit - used - n, ctx);
+    rv = UvOsIoSetup(limit - used - n, ctx);
     if (rv != 0) {
         /* The `limit - used - n` calculation is racy and io_setup can fail with
          * EAGAIN if in meantime another proces has reserved some events */
@@ -57,10 +57,10 @@ int AioFill(aio_context_t *ctx, unsigned n)
     return 0;
 }
 
-void AioDestroy(aio_context_t ctx)
+void AioDestroy(raft_aio_context *ctx)
 {
     int rv;
 
-    rv = syscall(__NR_io_destroy, ctx);
+    rv = UvOsIoDestroy(ctx);
     munit_assert_int(rv, ==, 0);
 }

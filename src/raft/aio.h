@@ -4,10 +4,12 @@
 #include <linux/aio_abi.h>
 #include <time.h>
 
-int UvOsIoSetup(unsigned nr, aio_context_t *ctxp);
-int UvOsIoDestroy(aio_context_t ctx);
-int UvOsIoSubmit(aio_context_t ctx, long nr, struct iocb **iocbpp);
-int UvOsIoGetevents(aio_context_t ctx,
+typedef struct raft_aio_context_s raft_aio_context;
+
+int UvOsIoSetup(unsigned nr, raft_aio_context **out);
+int UvOsIoDestroy(raft_aio_context *ctx);
+int UvOsIoSubmit(raft_aio_context *ctx, long nr, struct iocb **iocbpp);
+int UvOsIoGetevents(raft_aio_context *ctx,
 		    long min_nr,
 		    long max_nr,
 		    struct io_event *events,

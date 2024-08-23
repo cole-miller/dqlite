@@ -23,7 +23,7 @@ struct UvWriter
 	struct uv_loop_s *loop;  /* Event loop */
 	uv_file fd;              /* File handle */
 	bool async;              /* Whether fully async I/O is supported */
-	aio_context_t ctx;       /* KAIO handle */
+	raft_aio_context *ctx;
 	struct io_event *events; /* Array of KAIO response objects */
 	unsigned n_events;       /* Length of the events array */
 	int event_fd;            /* Poll'ed to check if write is finished */

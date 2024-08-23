@@ -42,7 +42,7 @@ static void uvWriterReqFinish(struct UvWriterReq *req)
 }
 
 /* Wrapper around the low-level OS syscall, providing a better error message. */
-static int uvWriterIoSetup(unsigned n, aio_context_t *ctx, char *errmsg)
+static int uvWriterIoSetup(unsigned n, raft_aio_context **ctx, char *errmsg)
 {
 	int rv;
 	rv = UvOsIoSetup(n, ctx);
@@ -70,7 +70,7 @@ static void uvWriterWorkCb(uv_work_t *work)
 {
 	struct UvWriterReq *req; /* Writer request object */
 	struct UvWriter *w;      /* Writer object */
-	aio_context_t ctx;       /* KAIO handle */
+	raft_aio_context *ctx;
 	struct iocb *iocbs;      /* Pointer to KAIO request object */
 	struct io_event event;   /* KAIO response object */
 	int n_events;

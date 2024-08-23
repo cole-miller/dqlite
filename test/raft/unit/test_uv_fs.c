@@ -384,7 +384,7 @@ TEST(UvFsProbeCapabilities, noSpace, DirTmpfsSetUp, DirTearDown, 0, NULL)
 TEST(UvFsProbeCapabilities, noResources, DirBtrfsSetUp, DirTearDown, 0, NULL)
 {
     const char *dir = data;
-    aio_context_t ctx = 0;
+    raft_aio_context *ctx;
     int rv;
     if (dir == NULL) {
         return MUNIT_SKIP;

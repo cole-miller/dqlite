@@ -754,11 +754,13 @@ static int probeDirectIO(int fd, size_t *size, char *errmsg)
 	return 0;
 }
 
+#include <stdlib.h>
+
 /* Check if fully non-blocking async I/O is possible on the given fd. */
 static int probeAsyncIO(int fd, size_t size, bool *ok, char *errmsg)
 {
 	void *buf;                  /* Buffer to use for the probe write */
-	aio_context_t ctx = 0;      /* KAIO context handle */
+	raft_aio_context *ctx;
 	struct iocb iocb;           /* KAIO request object */
 	struct iocb *iocbs = &iocb; /* Because the io_submit() API sucks */
 	struct io_event event;      /* KAIO response object */

@@ -502,7 +502,7 @@ TEST(append, noSpaceResolved, setUp, tearDownDeps, 0, DirTmpfsParams)
 TEST(append, writeError, setUp, tearDown, 0, NULL)
 {
     struct fixture *f = data;
-    aio_context_t ctx = 0;
+    raft_aio_context *ctx;
 
     /* FIXME: doesn't fail anymore after
      * https://github.com/CanonicalLtd/raft/pull/49 */
@@ -592,7 +592,7 @@ TEST(append, currentSegment, setUp, tearDownDeps, 0, NULL)
 TEST(append, ioSetupError, setUp, tearDown, 0, NULL)
 {
     struct fixture *f = data;
-    aio_context_t ctx = 0;
+    raft_aio_context *ctx;
     int rv;
     rv = AioFill(&ctx, 0);
     if (rv != 0) {

@@ -172,7 +172,7 @@ TEST(init, probeAsyncIoOom, setUp, tearDown, 0, NULL)
     /* XXX: fails on ppc64el */
     return MUNIT_SKIP;
 #endif
-    HeapFaultConfig(&f->heap, 2 /* delay */, 1 /* repeat */);
+    HeapFaultConfig(&f->heap, 3 /* delay */, 1 /* repeat */);
     HEAP_FAULT_ENABLE;
     INIT_ERROR(f->dir, RAFT_NOMEM, "probe Async I/O: out of memory");
     return 0;
