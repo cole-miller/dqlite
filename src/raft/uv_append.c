@@ -314,7 +314,7 @@ static int uvAliveSegmentWrite(struct uvAliveSegment *s)
 	assert(s->counter != 0);
 	assert(s->pending.n > 0);
 	uvSegmentBufferFinalize(&s->pending, &s->buf);
-	rv = UvWriterSubmit(&s->writer, &s->write, &s->buf, 1,
+	rv = UvWriterSubmit(&s->writer, &s->write, s->buf,
 			    s->next_block * s->uv->block_size,
 			    uvAliveSegmentWriteCb);
 	if (rv != 0) {

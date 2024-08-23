@@ -20,10 +20,10 @@ static void uvWriterReqSetStatus(struct UvWriterReq *req, int result)
 	if (result < 0) {
 		ErrMsgPrintf(req->errmsg, "write failed: %d", result);
 		req->status = RAFT_IOERR;
-	} else if ((size_t)result < req->len) {
+	} else if ((size_t)result < req->buf.len) {
 		ErrMsgPrintf(req->errmsg,
 			     "short write: %d bytes instead of %zu", result,
-			     req->len);
+			     req->buf.len);
 		req->status = RAFT_NOSPACE;
 	} else {
 		req->status = 0;
@@ -71,15 +71,12 @@ static void uvWriterWorkCb(uv_work_t *work)
 	struct UvWriterReq *req; /* Writer request object */
 	struct UvWriter *w;      /* Writer object */
 	raft_aio_context *ctx;
-	struct iocb *iocbs;      /* Pointer to KAIO request object */
 	struct io_event event;   /* KAIO response object */
 	int n_events;
 	int rv;
 
 	req = work->data;
 	w = req->writer;
-
-	iocbs = &req->iocb;
 
 	/* If more than one write in parallel is allowed, submit the AIO request
 	 * using a dedicated context, to avoid synchronization issues between
@@ -98,7 +95,8 @@ static void uvWriterWorkCb(uv_work_t *work)
 	}
 
 	/* Submit the request */
-	rv = UvOsIoSubmit(ctx, 1, &iocbs);
+	rv = raft_aio_pwrite(ctx, w->fd, req->buf.base, req->buf.len, req->offset,
+			     0, -1, req);
 	if (rv != 0) {
 		/* UNTESTED: since we're not using NOWAIT and the parameters are
 		 * valid, this shouldn't fail. */
@@ -110,10 +108,8 @@ static void uvWriterWorkCb(uv_work_t *work)
 	/* Wait for the request to complete */
 	n_events = UvOsIoGetevents(ctx, 1, 1, &event, NULL);
 	assert(n_events == 1);
-	if (n_events != 1) {
-		/* UNTESTED */
-		rv = n_events >= 0 ? -1 : n_events;
-	}
+	/* FIXME(cole) have Getevents do it */
+	raft_free((void *)event.obj);
 
 out_after_io_setup:
 	if (w->n_events > 1) {
@@ -190,13 +186,13 @@ static void uvWriterPollCb(uv_poll_t *poller, int status, int events)
 		struct io_event *event = &w->events[i];
 		struct UvWriterReq *req = *((void **)&event->data);
 
+		/* FIXME(cole) have Getevents take care of it */
+		raft_free((void *)event->obj);
+
 		/* If we got EAGAIN, it means it was not possible to perform the
 		 * write asynchronously, so let's fall back to the threadpool.
 		 */
 		if (event->res == -EAGAIN) {
-			req->iocb.aio_flags &= (unsigned)~IOCB_FLAG_RESFD;
-			req->iocb.aio_resfd = 0;
-			req->iocb.aio_rw_flags &= ~RWF_NOWAIT;
 			assert(req->work.data == NULL);
 			req->work.data = req;
 			rv = uv_queue_work(w->loop, &req->work, uvWriterWorkCb,
@@ -415,26 +411,13 @@ void UvWriterClose(struct UvWriter *w, UvWriterCloseCb cb)
 	}
 }
 
-/* Return the total lengths of the given buffers. */
-static size_t lenOfBufs(const uv_buf_t bufs[], unsigned n)
-{
-	size_t len = 0;
-	unsigned i;
-	for (i = 0; i < n; i++) {
-		len += bufs[i].len;
-	}
-	return len;
-}
-
 int UvWriterSubmit(struct UvWriter *w,
 		   struct UvWriterReq *req,
-		   const uv_buf_t bufs[],
-		   unsigned n,
+		   uv_buf_t buf,
 		   size_t offset,
 		   UvWriterReqCb cb)
 {
 	int rv = 0;
-	struct iocb *iocbs = &req->iocb;
 	assert(!w->closing);
 
 	/* TODO: at the moment we are not leveraging the support for concurrent
@@ -447,52 +430,25 @@ int UvWriterSubmit(struct UvWriter *w,
 
 	assert(w->fd >= 0);
 	assert(w->event_fd >= 0);
-	assert(w->ctx != 0);
+	assert(w->ctx != NULL);
 	assert(req != NULL);
-	assert(bufs != NULL);
-	assert(n > 0);
 
 	req->writer = w;
-	req->len = lenOfBufs(bufs, n);
 	req->status = -1;
 	req->work.data = NULL;
 	req->cb = cb;
-	memset(&req->iocb, 0, sizeof req->iocb);
+	req->buf = buf;
+	req->offset = (off_t)offset;
 	memset(req->errmsg, 0, sizeof req->errmsg);
 
-	req->iocb.aio_fildes = (uint32_t)w->fd;
-	req->iocb.aio_lio_opcode = IOCB_CMD_PWRITEV;
-	req->iocb.aio_reqprio = 0;
-	*((void **)(&req->iocb.aio_buf)) = (void *)bufs;
-	req->iocb.aio_nbytes = n;
-	req->iocb.aio_offset = (int64_t)offset;
-	*((void **)(&req->iocb.aio_data)) = (void *)req;
-
-#if defined(RWF_HIPRI)
-	/* High priority request, if possible */
-	/* TODO: do proper kernel feature detection for this one. */
-	/* req->iocb.aio_rw_flags |= RWF_HIPRI; */
-#endif
-
-#if defined(RWF_DSYNC)
-	/* Use per-request synchronous I/O if available. Otherwise, we have
-	 * opened the file with O_DSYNC. */
-	/* TODO: do proper kernel feature detection for this one. */
-	/* req->iocb.aio_rw_flags |= RWF_DSYNC; */
-#endif
-
-	/* If io_submit can be run in a 100% non-blocking way, we'll try to
-	 * write without using the threadpool. */
-	if (w->async) {
-		req->iocb.aio_flags |= IOCB_FLAG_RESFD;
-		req->iocb.aio_resfd = (uint32_t)w->event_fd;
-		req->iocb.aio_rw_flags |= RWF_NOWAIT;
-	}
+	/* FIXME(cole) RWF_HIPRI, RWF_DSYNC (wtf) */
 
 	/* Try to submit the write request asynchronously */
 	if (w->async) {
 		queue_insert_tail(&w->poll_queue, &req->queue);
-		rv = UvOsIoSubmit(w->ctx, 1, &iocbs);
+		rv = raft_aio_pwrite(w->ctx, w->fd, buf.base, buf.len,
+				     (off_t)offset, RWF_NOWAIT, w->event_fd,
+				     req);
 
 		/* If no error occurred, we're done, the write request was
 		 * submitted. */
@@ -512,12 +468,6 @@ int UvWriterSubmit(struct UvWriter *w,
 				rv = RAFT_IOERR;
 				goto err;
 		}
-
-		/* Submitting the write would block, or NOWAIT is not
-		 * supported. Let's run this request in the threadpool. */
-		req->iocb.aio_flags &= (unsigned)~IOCB_FLAG_RESFD;
-		req->iocb.aio_resfd = 0;
-		req->iocb.aio_rw_flags &= ~RWF_NOWAIT;
 	}
 
 	/* If we got here it means we need to run io_submit in the threadpool.

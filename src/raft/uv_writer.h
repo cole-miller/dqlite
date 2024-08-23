@@ -59,11 +59,11 @@ struct UvWriterReq
 {
 	void *data;              /* User data */
 	struct UvWriter *writer; /* Originating writer */
-	size_t len;              /* Total number of bytes to write */
+	uv_buf_t buf;
+	off_t offset;
 	int status;              /* Request result code */
 	struct uv_work_s work;   /* To execute logic in the threadpool */
 	UvWriterReqCb cb; /* Callback to invoke upon request completion */
-	struct iocb iocb; /* KAIO request (for writing) */
 	char errmsg[256]; /* Error description (for thread-safety) */
 	queue queue;      /* Prev/next links in the inflight queue */
 };
@@ -71,8 +71,7 @@ struct UvWriterReq
 /* Asynchronously write data to the underlying file. */
 int UvWriterSubmit(struct UvWriter *w,
 		   struct UvWriterReq *req,
-		   const uv_buf_t bufs[],
-		   unsigned n,
+		   uv_buf_t buf,
 		   size_t offset,
 		   UvWriterReqCb cb);
 
