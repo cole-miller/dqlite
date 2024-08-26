@@ -13,9 +13,7 @@ int raft_aio_pwrite(raft_aio_context *ctx, int fd,
 		    void *buf, size_t len, off_t off,
 		    int rw_flags, int resfd, void *data);
 int UvOsIoGetevents(raft_aio_context *ctx,
-		    long min_nr,
 		    long max_nr,
-		    struct io_event *events,
-		    struct timespec *timeout);
+		    struct io_event *events);
 
 #endif /* RAFT_AIO_H_ */

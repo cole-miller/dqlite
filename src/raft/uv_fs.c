@@ -799,7 +799,7 @@ static int probeAsyncIO(int fd, size_t size, bool *ok, char *errmsg)
 	}
 
 	/* Fetch the response: will block until done. */
-	n_events = UvOsIoGetevents(ctx, 1, 1, &event, NULL);
+	n_events = UvOsIoGetevents(ctx, 1, &event);
 	assert(n_events == 1);
 	/* FIXME(cole) have Getevents take care of it */
 	raft_free((void *)event.obj);

@@ -74,21 +74,19 @@ int raft_aio_pwrite(raft_aio_context *ctx, int fd,
 }
 
 int UvOsIoGetevents(raft_aio_context *ctx,
-		    long min_nr,
 		    long max_nr,
-		    struct io_event *events,
-		    struct timespec *timeout)
+		    struct io_event *events)
 {
 	int rv;
 	do {
 		rv = (int)syscall(__NR_io_getevents, ctx->inner,
-				  min_nr, max_nr, events, timeout);
+				  1, max_nr, events);
 	} while (rv == -1 && errno == EINTR);
 
 	if (rv == -1) {
 		return -errno;
 	}
-	assert(rv >= min_nr);
+	assert(rv >= 1);
 	assert(rv <= max_nr);
 	return rv;
 }

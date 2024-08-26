@@ -106,7 +106,7 @@ static void uvWriterWorkCb(uv_work_t *work)
 	}
 
 	/* Wait for the request to complete */
-	n_events = UvOsIoGetevents(ctx, 1, 1, &event, NULL);
+	n_events = UvOsIoGetevents(ctx, 1, &event);
 	assert(n_events == 1);
 	/* FIXME(cole) have Getevents do it */
 	raft_free((void *)event.obj);
@@ -174,7 +174,7 @@ static void uvWriterPollCb(uv_poll_t *poller, int status, int events)
 	 * If we got here at least one write should have completed and io_events
 	 * should return immediately without blocking. */
 	n_events =
-	    UvOsIoGetevents(w->ctx, 1, (long int)w->n_events, w->events, NULL);
+	    UvOsIoGetevents(w->ctx, (long int)w->n_events, w->events);
 	assert(n_events >= 1);
 	if (n_events < 1) {
 		/* UNTESTED */
