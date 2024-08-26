@@ -761,7 +761,7 @@ static int probeAsyncIO(int fd, size_t size, bool *ok, char *errmsg)
 {
 	void *buf;                  /* Buffer to use for the probe write */
 	raft_aio_context *ctx;
-	struct io_event event;      /* KAIO response object */
+	struct raft_aio_event event;
 	int n_events;
 	int rv;
 
@@ -782,7 +782,8 @@ static int probeAsyncIO(int fd, size_t size, bool *ok, char *errmsg)
 	memset(buf, 0, size);
 
 	/* Submit the KAIO request */
-	rv = raft_aio_pwrite(ctx, fd, buf, size, 0, RWF_NOWAIT|RWF_DSYNC, -1, NULL);
+	rv = raft_aio_pwrite(ctx, fd, buf, size, 0,
+			     RAFT_AIO_NOWAIT|RAFT_AIO_DSYNC, -1, NULL);
 	if (rv != 0) {
 		/* UNTESTED: in practice this should fail only with ENOMEM */
 		raft_aligned_free(size, buf);
@@ -801,8 +802,6 @@ static int probeAsyncIO(int fd, size_t size, bool *ok, char *errmsg)
 	/* Fetch the response: will block until done. */
 	n_events = UvOsIoGetevents(ctx, 1, &event);
 	assert(n_events == 1);
-	/* FIXME(cole) have Getevents take care of it */
-	raft_free((void *)event.obj);
 
 	/* Release the write buffer. */
 	raft_aligned_free(size, buf);

@@ -71,7 +71,7 @@ static void uvWriterWorkCb(uv_work_t *work)
 	struct UvWriterReq *req; /* Writer request object */
 	struct UvWriter *w;      /* Writer object */
 	raft_aio_context *ctx;
-	struct io_event event;   /* KAIO response object */
+	struct raft_aio_event event;
 	int n_events;
 	int rv;
 
@@ -108,8 +108,6 @@ static void uvWriterWorkCb(uv_work_t *work)
 	/* Wait for the request to complete */
 	n_events = UvOsIoGetevents(ctx, 1, &event);
 	assert(n_events == 1);
-	/* FIXME(cole) have Getevents do it */
-	raft_free((void *)event.obj);
 
 out_after_io_setup:
 	if (w->n_events > 1) {
@@ -120,7 +118,7 @@ out:
 	if (rv != 0) {
 		req->status = rv;
 	} else {
-		uvWriterReqSetStatus(req, (int)event.res);
+		uvWriterReqSetStatus(req, event.res);
 	}
 
 	return;
@@ -173,8 +171,7 @@ static void uvWriterPollCb(uv_poll_t *poller, int status, int events)
 	 *
 	 * If we got here at least one write should have completed and io_events
 	 * should return immediately without blocking. */
-	n_events =
-	    UvOsIoGetevents(w->ctx, (long int)w->n_events, w->events);
+	n_events = UvOsIoGetevents(w->ctx, (long)w->n_events, w->events);
 	assert(n_events >= 1);
 	if (n_events < 1) {
 		/* UNTESTED */
@@ -183,11 +180,8 @@ static void uvWriterPollCb(uv_poll_t *poller, int status, int events)
 	}
 
 	for (i = 0; i < (unsigned)n_events; i++) {
-		struct io_event *event = &w->events[i];
-		struct UvWriterReq *req = *((void **)&event->data);
-
-		/* FIXME(cole) have Getevents take care of it */
-		raft_free((void *)event->obj);
+		struct raft_aio_event *event = &w->events[i];
+		struct UvWriterReq *req = event->data;
 
 		/* If we got EAGAIN, it means it was not possible to perform the
 		 * write asynchronously, so let's fall back to the threadpool.
@@ -207,7 +201,7 @@ static void uvWriterPollCb(uv_poll_t *poller, int status, int events)
 			continue;
 		}
 
-		uvWriterReqSetStatus(req, (int)event->res);
+		uvWriterReqSetStatus(req, event->res);
 
 	finish:
 		uvWriterReqFinish(req);
@@ -441,14 +435,14 @@ int UvWriterSubmit(struct UvWriter *w,
 	req->offset = (off_t)offset;
 	memset(req->errmsg, 0, sizeof req->errmsg);
 
-	/* FIXME(cole) RWF_HIPRI, RWF_DSYNC (wtf) */
+	/* FIXME(cole) RWF_HIPRI? RWF_DSYNC? */
 
 	/* Try to submit the write request asynchronously */
 	if (w->async) {
 		queue_insert_tail(&w->poll_queue, &req->queue);
 		rv = raft_aio_pwrite(w->ctx, w->fd, buf.base, buf.len,
-				     (off_t)offset, RWF_NOWAIT, w->event_fd,
-				     req);
+				     (off_t)offset, RAFT_AIO_NOWAIT,
+				     w->event_fd, req);
 
 		/* If no error occurred, we're done, the write request was
 		 * submitted. */
