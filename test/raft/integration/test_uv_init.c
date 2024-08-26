@@ -4,8 +4,9 @@
 #include "../lib/runner.h"
 #include "../lib/uv.h"
 
-#include <linux/magic.h>
 #include <sys/vfs.h>
+
+#define TMPFS_MAGIC 0x01021994
 
 #define BAD_FORMAT 3
 #define BAD_FORMAT_STR "3"
